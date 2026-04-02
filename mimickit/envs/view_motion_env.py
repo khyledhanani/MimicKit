@@ -29,6 +29,7 @@ class ViewMotionEnv(char_env.CharEnv):
                                           obj_type=engine.ObjType.articulated,
                                           asset_file=char_file, 
                                           name="character",
+                                          is_visual=True,
                                           start_pos=self._init_root_pos.cpu().numpy(),
                                           start_rot=self._init_root_rot.cpu().numpy(),
                                           enable_self_collisions=False,

@@ -204,9 +204,33 @@ class Engine:
     def get_control_mode(self):
         return
     
+    @abc.abstractmethod
+    def configure_inter_actor_collisions(self, inter_actor_collisions, bodies_a=None, bodies_b=None):
+        """Configure selective collision filtering between actors.
+
+        Must be called before initialize_sim().
+
+        Args:
+            inter_actor_collisions: If False, suppress all cross-actor contact.
+                If True with bodies_a/bodies_b=None, allow full cross-actor contact.
+                If True with body lists, allow only those body-pair shapes to collide.
+            bodies_a: List of body name substrings for actor A contact bodies.
+            bodies_b: List of body name substrings for actor B contact bodies.
+        """
+        return
+
+    @abc.abstractmethod
+    def get_inter_actor_contact_forces(self, obj_id_a):
+        """Return per-body inter-actor contact forces for actor A bodies.
+
+        Returns tensor of shape [num_envs, n_contact_bodies_a, 3], or None if
+        inter-actor contact sensing is not configured.
+        """
+        return
+
     def draw_lines(self, env_id, start_verts, end_verts, cols, line_width):
         return
-    
+
     def register_keyboard_callback(self, key_str, callback_func):
         return
 

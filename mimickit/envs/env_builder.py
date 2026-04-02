@@ -5,8 +5,8 @@ import engines.engine_builder as engine_builder
 
 from util.logger import Logger
 
-def build_env(env_file, engine_file, num_envs, device, visualize, record_video=False):
-    env_config, engine_config = load_configs(env_file, engine_file)
+def build_env(env_file, engine_file, num_envs, device, visualize, record_video=False, env_overrides=None):
+    env_config, engine_config = load_configs(env_file, engine_file, env_overrides=env_overrides)
 
     env_name = env_config["env_name"]
     Logger.print("Building {} env".format(env_name))
@@ -17,6 +17,9 @@ def build_env(env_file, engine_file, num_envs, device, visualize, record_video=F
     elif (env_name == "deepmimic"):
         import envs.deepmimic_env as deepmimic_env
         env = deepmimic_env.DeepMimicEnv(env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize, record_video=record_video)
+    elif (env_name == "dual_deepmimic"):
+        import envs.dual_deepmimic_env as dual_deepmimic_env
+        env = dual_deepmimic_env.DualDeepMimicEnv(env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize, record_video=record_video)
     elif (env_name == "amp"):
         import envs.amp_env as amp_env
         env = amp_env.AMPEnv(env_config=env_config, engine_config=engine_config, num_envs=num_envs, device=device, visualize=visualize, record_video=record_video)
@@ -54,9 +57,16 @@ def load_config(file):
         config = None
     return config
 
-def load_configs(env_file, engine_file):
+def load_configs(env_file, engine_file, env_overrides=None):
     env_config = load_config(env_file)
     engine_config = load_config(engine_file)
+
+    if env_overrides:
+        Logger.print("Overriding Environment config from arguments:")
+        for key, val in env_overrides.items():
+            env_config[key] = val
+            Logger.print("\t{}: {}".format(key, val))
+        Logger.print("")
 
     if ("engine" in env_config):
         env_engine_config = env_config["engine"]

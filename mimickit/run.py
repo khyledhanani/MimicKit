@@ -34,8 +34,22 @@ def build_env(args, num_envs, device, visualize):
     env_file = args.parse_string("env_config")
     engine_file = args.parse_string("engine_config")
     record_video = args.parse_bool("video", False)
-    
-    env = env_builder.build_env(env_file, engine_file, num_envs, device, visualize=visualize, record_video=record_video)
+
+    env_overrides = {}
+    if args.has_key("control_mode"):
+        env_overrides["control_mode"] = args.parse_string("control_mode")
+    if len(env_overrides) == 0:
+        env_overrides = None
+
+    env = env_builder.build_env(
+        env_file,
+        engine_file,
+        num_envs,
+        device,
+        visualize=visualize,
+        record_video=record_video,
+        env_overrides=env_overrides,
+    )
     return env
 
 def build_agent(args, env, device):

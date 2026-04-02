@@ -330,6 +330,12 @@ class NewtonEngine(engine.Engine):
         self._obj_start_pos = []
         self._obj_start_rot = []
         self._obj_colors = []
+
+        # Inter-actor collision config (set via configure_inter_actor_collisions before initialize_sim)
+        self._inter_actor_collisions = True   # default: full physics, no extra filtering
+        self._inter_actor_collision_bodies_a = None
+        self._inter_actor_collision_bodies_b = None
+        self._obj_shape_ranges = {}           # {env_id: {obj_id: (start, end)}}
         
         if ("control_mode" in config):
             self._control_mode = engine.ControlMode[config["control_mode"]]
@@ -363,9 +369,21 @@ class NewtonEngine(engine.Engine):
 
         return env_id
     
+    def configure_inter_actor_collisions(self, inter_actor_collisions, bodies_a=None, bodies_b=None):
+        self._inter_actor_collisions = inter_actor_collisions
+        self._inter_actor_collision_bodies_a = bodies_a
+        self._inter_actor_collision_bodies_b = bodies_b
+
+    def get_inter_actor_contact_forces(self, obj_id_a):
+        if not hasattr(self, '_inter_actor_contact_forces_tensor') or \
+                self._inter_actor_contact_forces_tensor is None:
+            return None
+        return self._inter_actor_contact_forces_tensor
+
     def initialize_sim(self):
         self._validate_envs()
         self._build_objs()
+        self._setup_inter_actor_collision_filters()
 
         Logger.print("Initializing simulation...")
         self._sim_model = self._scene_builder.finalize(device=self._device, requires_grad=False)
@@ -799,13 +817,18 @@ class NewtonEngine(engine.Engine):
         objs_per_env = len(self._obj_builders[0])
         total_objs = num_envs * objs_per_env
 
+        self._obj_shape_ranges = {}
         for env_id in range(num_envs):
             self._scene_builder.begin_world()
+            self._obj_shape_ranges[env_id] = {}
 
             for obj_id in range(objs_per_env):
                 obj_builder = self._obj_builders[env_id][obj_id]
+                shape_start = len(self._scene_builder.shape_body)
                 self._scene_builder.add_builder(obj_builder)
-                
+                shape_end = len(self._scene_builder.shape_body)
+                self._obj_shape_ranges[env_id][obj_id] = (shape_start, shape_end)
+
                 num_created = env_id * objs_per_env + obj_id + 1
                 Logger.print("Building {:d}/{:d} objs".format(num_created, total_objs), end='\r')
 
@@ -1001,8 +1024,77 @@ class NewtonEngine(engine.Engine):
         self._scene_builder.add_ground_plane(cfg=shape_cfg)
         return
     
+    def _setup_inter_actor_collision_filters(self):
+        """Add shape collision filter pairs between actors before finalize().
+
+        Behaviour by config:
+        - inter_actor_collisions=False  → suppress ALL cross-actor shape pairs.
+        - inter_actor_collisions=True, bodies=None → no filtering (full contact).
+        - inter_actor_collisions=True, bodies specified → suppress cross-actor pairs
+          EXCEPT those where shape_a body is in bodies_a AND shape_b body is in bodies_b.
+        """
+        # Fast-path: full contact, no filtering needed
+        if self._inter_actor_collisions and \
+                self._inter_actor_collision_bodies_a is None and \
+                self._inter_actor_collision_bodies_b is None:
+            return
+
+        num_envs = self.get_num_envs()
+        objs_per_env = len(self._obj_builders[0])
+        if objs_per_env < 2:
+            return
+
+        def _allowed_local_shapes(actor_builder, body_patterns):
+            """Return set of local shape indices whose body name matches any pattern."""
+            if body_patterns is None:
+                return None  # all shapes allowed
+            allowed = set()
+            for local_s, body_local in enumerate(actor_builder.shape_body):
+                body_label = actor_builder.body_label[body_local]
+                body_name = os.path.basename(body_label)
+                if any(p in body_name for p in body_patterns):
+                    allowed.add(local_s)
+            return allowed
+
+        # Use env 0 builders (all envs use the same cached builders for the same char file)
+        builder_a = self._obj_builders[0][0]
+        builder_b = self._obj_builders[0][1]
+        allowed_a = _allowed_local_shapes(builder_a, self._inter_actor_collision_bodies_a)
+        allowed_b = _allowed_local_shapes(builder_b, self._inter_actor_collision_bodies_b)
+
+        num_filtered = 0
+        for env_id in range(num_envs):
+            for obj_a in range(objs_per_env - 1):
+                for obj_b in range(obj_a + 1, objs_per_env):
+                    start_a, end_a = self._obj_shape_ranges[env_id][obj_a]
+                    start_b, end_b = self._obj_shape_ranges[env_id][obj_b]
+                    builder_for_a = self._obj_builders[env_id][obj_a]
+                    builder_for_b = self._obj_builders[env_id][obj_b]
+                    shapes_a_count = end_a - start_a
+                    shapes_b_count = end_b - start_b
+
+                    for local_a in range(shapes_a_count):
+                        global_a = start_a + local_a
+                        for local_b in range(shapes_b_count):
+                            global_b = start_b + local_b
+                            if not self._inter_actor_collisions:
+                                # Suppress all cross-actor pairs
+                                self._scene_builder.add_shape_collision_filter_pair(global_a, global_b)
+                                num_filtered += 1
+                            else:
+                                # Selective: suppress unless both shapes are in the allowed sets
+                                a_ok = (allowed_a is None) or (local_a in allowed_a)
+                                b_ok = (allowed_b is None) or (local_b in allowed_b)
+                                if not (a_ok and b_ok):
+                                    self._scene_builder.add_shape_collision_filter_pair(global_a, global_b)
+                                    num_filtered += 1
+
+        Logger.print("Inter-actor collision filter pairs added: {:d}".format(num_filtered))
+        return
+
     def _build_contact_sensors(self):
         self._build_ground_contact_sensor()
+        self._build_inter_actor_contact_sensor()
         return
 
     def _build_ground_contact_sensor(self):
@@ -1076,8 +1168,70 @@ class NewtonEngine(engine.Engine):
             self._apply_pd_explicit_torque(raw_state, control)
         return
     
+    def _build_inter_actor_contact_sensor(self):
+        self._inter_actor_contact_sensor = None
+        self._inter_actor_contact_forces_tensor = None
+
+        if not self._inter_actor_collisions:
+            return
+        if self._inter_actor_collision_bodies_a is None or \
+                self._inter_actor_collision_bodies_b is None:
+            return
+
+        articulation_start = self._sim_model.articulation_start.numpy()
+        num_envs = self.get_num_envs()
+        objs_per_env = self.get_objs_per_env()
+
+        def _body_indices_for_articulation(art_idx, body_patterns):
+            body_start = int(articulation_start[art_idx])
+            body_end = int(articulation_start[art_idx + 1])
+            labels = self._sim_model.body_label[body_start:body_end]
+            indices = []
+            for i, label in enumerate(labels):
+                name = os.path.basename(label)
+                if any(p in name for p in body_patterns):
+                    indices.append(body_start + i)
+            return indices
+
+        all_indices_a = []
+        all_indices_b = []
+        n_a_per_env = None
+        for env_id in range(num_envs):
+            art_a = env_id * objs_per_env + 0
+            art_b = env_id * objs_per_env + 1
+            idx_a = _body_indices_for_articulation(art_a, self._inter_actor_collision_bodies_a)
+            idx_b = _body_indices_for_articulation(art_b, self._inter_actor_collision_bodies_b)
+            if n_a_per_env is None:
+                n_a_per_env = len(idx_a)
+            all_indices_a += idx_a
+            all_indices_b += idx_b
+
+        if not all_indices_a or not all_indices_b:
+            Logger.print("Warning: no bodies found for inter-actor contact sensor; check body name patterns")
+            return
+
+        self._inter_actor_contact_sensor = newton.sensors.SensorContact(
+            self._sim_model,
+            sensing_obj_bodies=all_indices_a,
+            counterpart_bodies=all_indices_b,
+            include_total=True,
+            verbose=True,
+        )
+
+        # net_force shape: [n_sensing_bodies_total, 2, 3]
+        #   index 0 = force from counterpart (B bodies)
+        #   index 1 = total force on sensing body
+        raw = wp.to_torch(self._inter_actor_contact_sensor.net_force)
+        # Reshape to [num_envs, n_a_per_env, 2, 3] then expose [env, body, 3] for counterpart
+        self._inter_actor_contact_forces_tensor = raw.view(num_envs, n_a_per_env, 2, 3)[..., 0, :]
+        Logger.print("Inter-actor contact sensor: {:d} sensing bodies x {:d} counterpart bodies per env".format(
+            n_a_per_env, len(all_indices_b) // num_envs))
+        return
+
     def _update_contact_sensors(self):
         self._ground_contact_sensor.update(self._sim_state.raw_state, self._contacts)
+        if self._inter_actor_contact_sensor is not None:
+            self._inter_actor_contact_sensor.update(self._sim_state.raw_state, self._contacts)
         return
     
     def _visualize(self):

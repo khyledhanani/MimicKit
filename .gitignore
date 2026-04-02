@@ -1,7 +1,11 @@
 *.pyc
+*.DS_Store
 
 .vs/
 __pycache__/
 output/
 .vscode/
 wandb/
+data/
+dual_data/
+egohuman-rl/
