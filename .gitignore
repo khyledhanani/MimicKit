@@ -6,6 +6,10 @@ __pycache__/
 output/
 .vscode/
 wandb/
-data/
 dual_data/
 egohuman-rl/
+
+data/assets
+
+data/models
+data/motions
