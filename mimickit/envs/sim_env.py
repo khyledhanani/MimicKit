@@ -104,6 +104,16 @@ class SimEnv(base_env.BaseEnv):
 
         diag = super().record_diagnostics()
         return diag
+
+    def save_recorded_video(self, file_path):
+        if (not self._engine.enabled_record_video()):
+            return False
+        vid = self._engine.get_video_recording()
+        if (vid is None or vid.get_num_frames() == 0):
+            return False
+        vid.save(file_path)
+        self._engine.stop_video_recording()
+        return True
     
     def _pre_physics_step(self, actions):
         self._apply_action(actions)

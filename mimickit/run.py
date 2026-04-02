@@ -30,10 +30,10 @@ def load_args(argv):
 
     return args
 
-def build_env(args, num_envs, device, visualize):
+def build_env(args, num_envs, device, visualize, test_video_out=""):
     env_file = args.parse_string("env_config")
     engine_file = args.parse_string("engine_config")
-    record_video = args.parse_bool("video", False)
+    record_video = args.parse_bool("video", False) or (test_video_out != "")
 
     env_overrides = {}
     if args.has_key("control_mode"):
@@ -62,9 +62,16 @@ def train(agent, max_samples, out_dir, save_int_models, logger_type):
                       save_int_models=save_int_models, logger_type=logger_type)
     return
 
-def test(agent, test_episodes):
-    result = agent.test_model(num_episodes=test_episodes)
-    
+def test(agent, test_episodes, test_video_out=""):
+    save_path = ""
+    if (test_video_out != "" and mp_util.is_root_proc()):
+        save_path = test_video_out
+        parent = os.path.dirname(os.path.abspath(save_path))
+        if (parent != ""):
+            os.makedirs(parent, exist_ok=True)
+
+    result = agent.test_model(num_episodes=test_episodes, save_test_video_out=save_path)
+
     Logger.print("Mean Return: {}".format(result["mean_return"]))
     Logger.print("Mean Episode Length: {}".format(result["mean_ep_len"]))
     Logger.print("Episodes: {}".format(result["num_eps"]))
@@ -110,8 +117,11 @@ def set_rand_seed(args):
 
 def run(rank, num_procs, device, master_port, args):
     mode = args.parse_string("mode", "train")
+    test_video_out = args.parse_string("test_video_out", "")
     num_envs = args.parse_int("num_envs", 1)
     visualize = args.parse_bool("visualize", True)
+    if (mode == "test" and test_video_out != ""):
+        visualize = False
     logger_type = args.parse_string("logger", "txt")
     model_file = args.parse_string("model_file", "")
 
@@ -125,7 +135,10 @@ def run(rank, num_procs, device, master_port, args):
     set_np_formatting()
     create_output_dir(out_dir)
 
-    env = build_env(args, num_envs, device, visualize)
+    env = build_env(
+        args, num_envs, device, visualize,
+        test_video_out=(test_video_out if mode == "test" else ""),
+    )
     agent = build_agent(args, env, device)
 
     if (model_file != ""):
@@ -138,7 +151,7 @@ def run(rank, num_procs, device, master_port, args):
         
     elif (mode == "test"):
         test_episodes = args.parse_int("test_episodes", np.iinfo(np.int64).max)
-        test(agent=agent, test_episodes=test_episodes)
+        test(agent=agent, test_episodes=test_episodes, test_video_out=test_video_out)
 
     else:
         assert(False), "Unsupported mode: {}".format(mode)

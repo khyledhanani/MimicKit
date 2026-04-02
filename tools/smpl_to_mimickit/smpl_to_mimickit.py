@@ -49,13 +49,18 @@ from tools.smpl_to_mimickit.smpl_names import SMPL_BONE_ORDER_NAMES, SMPL_MUJOCO
 from tools.smpl_to_mimickit.smpl_constants import PARENT_INDICES, LOCAL_TRANSLATION
 from tools.smpl_to_mimickit.rotation_tools import compute_global_rotations, compute_local_rotations, compute_global_translations
 
-# 90-degree rotation around +X: maps Y-up world → Z-up world correctly.
-# Under this rotation: Y→Z (up stays up), Z→-Y (SMPL forward → -Y in Z-up), X→X.
-# Global body rotations must be conjugated: R_zup = F * R_yup * F^{-1}
-# This ensures both the world vectors AND the body-local frame vectors are
-# correctly re-expressed in Z-up, keeping the body upright after conversion.
-YUP_TO_ZUP = torch.tensor([0.7071068, 0.0, 0.0, 0.7071068])   # (x,y,z,w), 90° around +X
-YUP_TO_ZUP_INV = torch.tensor([-0.7071068, 0.0, 0.0, 0.7071068])  # conjugate, 90° around -X
+# Coordinate frame change: SMPL Y-up → MuJoCo Z-up.
+# Conjugation F*R*F^{-1} re-expresses global rotations in Z-up while preserving
+# the physical pose. F = 90° around +X maps Y→Z (up) and Z→-Y (forward).
+#
+# Root-only rest-pose correction: SMPL Y-up T-pose faces +Z, but MuJoCo SMPL
+# T-pose (identity) faces +X. After conjugation the T-pose ends up facing -Y,
+# so we pre-multiply the root by R_Z_NEG90 (-90° around Z) to shift it to +X.
+# DOF positions (relative joint rotations) do NOT need this — the offset cancels
+# in parent^{-1} * child.
+YUP_TO_ZUP     = torch.tensor([0.7071068,  0.0, 0.0, 0.7071068])   # (x,y,z,w), 90° around +X
+YUP_TO_ZUP_INV = torch.tensor([-0.7071068, 0.0, 0.0, 0.7071068])   # conjugate, -90° around +X
+R_Z_NEG90      = torch.tensor([0.0, 0.0, -0.7071068, 0.7071068])   # -90° around +Z
 
 
 def _parse_fps(data, input_fps: int) -> int:
@@ -198,9 +203,15 @@ def convert_smpl_to_mimickit(input_file: str,
     dof_pos = quat_to_exp_map(rotated_local_rot[:, 1:, :]).numpy().reshape(N, -1)
 
     root_rot_t = torch.tensor(root_rot, dtype=torch.float32)
+    N_r = root_rot_t.shape[0]
+    # Conjugate to re-express in Z-up, then apply rest-pose correction (-90° around Z)
+    # so that the MuJoCo T-pose facing (+X) matches the converted SMPL T-pose.
     rotated_root_rot_quat = quat_mul(
-        quat_mul(YUP_TO_ZUP.expand(root_rot_t.shape[0], -1), root_rot_t),
-        YUP_TO_ZUP_INV.expand(root_rot_t.shape[0], -1)
+        R_Z_NEG90.expand(N_r, -1),
+        quat_mul(
+            quat_mul(YUP_TO_ZUP.expand(N_r, -1), root_rot_t),
+            YUP_TO_ZUP_INV.expand(N_r, -1)
+        )
     )
     root_rot = quat_to_exp_map(rotated_root_rot_quat).numpy()
 

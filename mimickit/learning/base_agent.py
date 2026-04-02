@@ -90,7 +90,7 @@ class BaseAgent(torch.nn.Module):
 
         return
 
-    def test_model(self, num_episodes):
+    def test_model(self, num_episodes, save_test_video_out=""):
         self.eval()
         self.set_mode(AgentMode.TEST)
         
@@ -99,7 +99,7 @@ class BaseAgent(torch.nn.Module):
 
         with torch.no_grad():
             self._curr_obs, self._curr_info = self._reset_envs()
-            test_info = self._rollout_test(num_eps_proc)
+            test_info = self._rollout_test(num_eps_proc, save_test_video_out=save_test_video_out)
 
         return test_info
     
@@ -264,7 +264,7 @@ class BaseAgent(torch.nn.Module):
             self._exp_buffer.inc()
         return
     
-    def _rollout_test(self, num_episodes):
+    def _rollout_test(self, num_episodes, save_test_video_out=""):
         self._test_return_tracker.reset()
 
         if (num_episodes == 0):
@@ -279,12 +279,19 @@ class BaseAgent(torch.nn.Module):
             # this is mitigate bias in the return estimate towards shorter episodes
             min_eps_per_env = int(np.ceil(num_episodes / num_envs))
 
+            video_saved = False
             while True:
                 action, action_info = self._decide_action(self._curr_obs, self._curr_info)
 
                 next_obs, r, done, next_info = self._step_env(action)
                 self._test_return_tracker.update(r, done)
-            
+
+                if (save_test_video_out != "" and not video_saved and num_envs > 0):
+                    if (done[0].item() != base_env.DoneFlags.NULL.value):
+                        if (self._env.save_recorded_video(save_test_video_out)):
+                            Logger.print("Saved test video: {}".format(save_test_video_out))
+                        video_saved = True
+
                 self._curr_obs, self._curr_info = self._reset_done_envs(done)
             
                 eps_per_env = self._test_return_tracker.get_eps_per_env()
