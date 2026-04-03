@@ -49,18 +49,30 @@ from tools.smpl_to_mimickit.smpl_names import SMPL_BONE_ORDER_NAMES, SMPL_MUJOCO
 from tools.smpl_to_mimickit.smpl_constants import PARENT_INDICES, LOCAL_TRANSLATION
 from tools.smpl_to_mimickit.rotation_tools import compute_global_rotations, compute_local_rotations, compute_global_translations
 
-# Coordinate frame change: SMPL Y-up → MuJoCo Z-up.
-# Conjugation F*R*F^{-1} re-expresses global rotations in Z-up while preserving
-# the physical pose. F = 90° around +X maps Y→Z (up) and Z→-Y (forward).
+# Two coordinate-frame quaternions are needed:
 #
-# Root-only rest-pose correction: SMPL Y-up T-pose faces +Z, but MuJoCo SMPL
-# T-pose (identity) faces +X. After conjugation the T-pose ends up facing -Y,
-# so we pre-multiply the root by R_Z_NEG90 (-90° around Z) to shift it to +X.
-# DOF positions (relative joint rotations) do NOT need this — the offset cancels
-# in parent^{-1} * child.
+# 1) YUP_TO_ZUP / YUP_TO_ZUP_INV  (F = 90° around +X, maps Y→Z and Z→-Y)
+#    Used for:
+#      • Transforming the root rotation via conjugation F*R*F^{-1}, which
+#        re-expresses the global pelvis orientation in Z-up while preserving
+#        the physical direction.
+#      • Computing world-space FK joint positions for the z_correction step.
+#    R_Z_NEG90 is applied on top of the conjugated root to shift the SMPL
+#    T-pose rest facing direction from -Y to +X (MuJoCo SMPL default).
+#
+# 2) YUP_TO_ZUP_DOF  (= 120° around (-1,-1,-1)/√3, cyclic permutation X→Z→Y→X)
+#    Used for: converting body-joint DOF rotations (parent-relative) from
+#    SMPL Y-up axes to MuJoCo Z-up axes.
+#    In SMPL Y-up (body facing -Z, up +Y) the knee-flex axis is local-X.
+#    In MuJoCo Z-up (body facing +X, up +Z) the knee-flex axis is local-Y.
+#    The 120° cyclic permutation (X→Y, Y→Z, Z→X applied to rotation axes via
+#    conjugation ZUP_TO_YUP·R·YUP_TO_ZUP_DOF) achieves exactly this mapping.
+#    Equivalently: post-multiplying every global rotation by YUP_TO_ZUP_DOF
+#    before extracting parent-relative locals gives the same result.
 YUP_TO_ZUP     = torch.tensor([0.7071068,  0.0, 0.0, 0.7071068])   # (x,y,z,w), 90° around +X
 YUP_TO_ZUP_INV = torch.tensor([-0.7071068, 0.0, 0.0, 0.7071068])   # conjugate, -90° around +X
 R_Z_NEG90      = torch.tensor([0.0, 0.0, -0.7071068, 0.7071068])   # -90° around +Z
+YUP_TO_ZUP_DOF = torch.tensor([-0.5, -0.5, -0.5, 0.5])             # 120° around (-1,-1,-1)/√3
 
 
 def _parse_fps(data, input_fps: int) -> int:
@@ -179,21 +191,32 @@ def convert_smpl_to_mimickit(input_file: str,
         torch.tensor(pose_quat, dtype=torch.float32),
         PARENT_INDICES
     )
-    # Conjugation: F * R * F^{-1} re-expresses each global body rotation in Z-up world.
-    # Both the world-space vectors AND the body-local frame change under the coordinate
-    # transform, so similarity transform (not just left/right multiply) is required.
     n_flat = global_rot.reshape(-1, 4).shape[0]
-    rotated_global_rot = quat_mul(
+
+    # --- FK positions (used only for z_correction) ---
+    # Conjugation F*R*F^{-1} re-expresses global orientations in Z-up so that
+    # FK positions computed with LOCAL_TRANSLATION (Z-up) give world Z heights.
+    rotated_global_rot_zup = quat_mul(
         quat_mul(YUP_TO_ZUP.expand(n_flat, -1), global_rot.reshape(-1, 4)),
         YUP_TO_ZUP_INV.expand(n_flat, -1)
     ).reshape(N, -1, 4)
+
+    # --- Body-joint DOFs ---
+    # Post-multiply each global rotation by YUP_TO_ZUP_DOF (120° cyclic), then
+    # extract parent-relative locals.  This conjugates each local rotation by
+    # ZUP_TO_YUP (the inverse), which cyclically permutes the rotation axes
+    # X→Y, Y→Z, Z→X — mapping SMPL Y-up joint axes to MuJoCo Z-up joint axes.
+    rotated_global_rot_dof = quat_mul(
+        global_rot.reshape(-1, 4),
+        YUP_TO_ZUP_DOF.expand(n_flat, -1)
+    ).reshape(N, -1, 4)
     rotated_local_rot = compute_local_rotations(
-        rotated_global_rot,
+        rotated_global_rot_dof,
         PARENT_INDICES
     )
 
     global_translation = compute_global_translations(
-        rotated_global_rot,
+        rotated_global_rot_zup,
         torch.tensor(LOCAL_TRANSLATION, dtype=torch.float32),
         PARENT_INDICES
     ).numpy()
