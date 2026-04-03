@@ -415,9 +415,6 @@ class NewtonEngine(engine.Engine):
         return
     
     def step(self):
-        if (self.enabled_record_video() and self._recording):
-            self._video_recorder.capture_frame()
-
         if (self._graph):
             wp.capture_launch(self._graph)
         else:
@@ -426,6 +423,10 @@ class NewtonEngine(engine.Engine):
         self._solver.update_contacts(self._contacts, self._sim_state.raw_state)
         self._update_contact_sensors()
         self._sim_step_count += 1
+
+        # Record post-physics state so each frame matches end-of-step sim (incl. terminal pose on done).
+        if (self.enabled_record_video() and self._recording):
+            self._video_recorder.capture_frame()
         return
     
     def create_obj(self, env_id, obj_type, asset_file, name, is_visual=False, enable_self_collisions=True, 
