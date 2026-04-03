@@ -74,6 +74,11 @@ YUP_TO_ZUP_INV = torch.tensor([-0.7071068, 0.0, 0.0, 0.7071068])   # conjugate, 
 R_Z_NEG90      = torch.tensor([0.0, 0.0, -0.7071068, 0.7071068])   # -90° around +Z
 YUP_TO_ZUP_DOF = torch.tensor([-0.5, -0.5, -0.5, 0.5])             # 120° around (-1,-1,-1)/√3
 
+# Used for "zup" coord_system mode (mpc_joints format).
+# In that format root_orient is stored as q_mujoco * inv(INTERX_ROOT_BASIS_CORRECTION),
+# so post-multiplying by INTERX_ROOT_BASIS_CORRECTION recovers the MuJoCo root rotation.
+INTERX_ROOT_BASIS_CORRECTION = torch.tensor([-0.5, -0.5, -0.5, 0.5])  # 120° around (-1,-1,-1)/√3
+
 
 def _parse_fps(data, input_fps: int) -> int:
     fps = data.get("mocap_framerate", data.get("fps", input_fps))
@@ -128,7 +133,8 @@ def convert_smpl_to_mimickit(input_file: str,
                              end_frame: int = -1, 
                              output_fps: int = -1,
                              z_correction: str = "none",
-                             input_fps: int = -1) -> Motion:
+                             input_fps: int = -1,
+                             coord_system: str = "yup") -> Motion:
     """
     Convert SMPL/AMASS motion data to MimicKit format.
     
@@ -140,6 +146,16 @@ def convert_smpl_to_mimickit(input_file: str,
         end_frame: End frame for clipping (-1 for all)
         output_fps: Output frame rate (-1 to use source fps)
         z_correction: Z-axis correction method ("none", "calibrate", "full")
+        coord_system: Input coordinate system convention:
+            - "yup": Standard SMPL / InterX / AMASS format.  trans is in Y-up world
+              space (Y = height ~1.24 m); root_orient is expressed in the SMPL Y-up
+              basis.  The converter applies X-90° conjugation + R_Z_NEG90 to produce
+              the MuJoCo root rotation.
+            - "zup": MPC-joints format.  trans is *already* in Z-up world space
+              (Z = height); root_orient is stored in a pre-rotated basis where
+              post-multiplying by INTERX_ROOT_BASIS_CORRECTION gives the MuJoCo root
+              rotation.  Body joint DOFs (pose_body) remain in SMPL Y-up axes and
+              still receive the 120° cyclic transformation.
 
     Returns:
         MimicKit Motion object
@@ -174,12 +190,14 @@ def convert_smpl_to_mimickit(input_file: str,
 
     root_rot = exp_map_to_quat(torch.tensor(poses[:, 0:3], dtype=torch.float32)).numpy()
 
-    # Convert trans from SMPL Y-up to MimicKit Z-up: X unchanged, new_Y = -old_Z, new_Z = old_Y
-    # InterX trans is in Y-up space (Y = height ~1.24m); MimicKit expects Z-up (Z = height).
-    new_trans = trans.copy()
-    new_trans[:, 1] = -trans[:, 2]  # new_Y = -old_Z (depth becomes forward, negated)
-    new_trans[:, 2] = trans[:, 1]   # new_Z = old_Y  (height maps to Z)
-    trans = new_trans
+    if coord_system == "yup":
+        # Convert trans from SMPL Y-up to MimicKit Z-up: X unchanged, new_Y = -old_Z, new_Z = old_Y
+        # InterX trans is in Y-up space (Y = height ~1.24m); MimicKit expects Z-up (Z = height).
+        new_trans = trans.copy()
+        new_trans[:, 1] = -trans[:, 2]  # new_Y = -old_Z (depth becomes forward, negated)
+        new_trans[:, 2] = trans[:, 1]   # new_Z = old_Y  (height maps to Z)
+        trans = new_trans
+    # coord_system == "zup": trans is already in Z-up world space — use it as-is.
 
     pose_aa = np.concatenate([poses[:, :66], np.zeros((trans.shape[0], 6))], axis = -1) # Keep only SMPL parameters without hands, and explicitly set hand dofs to zero
 
@@ -193,19 +211,15 @@ def convert_smpl_to_mimickit(input_file: str,
     )
     n_flat = global_rot.reshape(-1, 4).shape[0]
 
-    # --- FK positions (used only for z_correction) ---
-    # Conjugation F*R*F^{-1} re-expresses global orientations in Z-up so that
-    # FK positions computed with LOCAL_TRANSLATION (Z-up) give world Z heights.
-    rotated_global_rot_zup = quat_mul(
-        quat_mul(YUP_TO_ZUP.expand(n_flat, -1), global_rot.reshape(-1, 4)),
-        YUP_TO_ZUP_INV.expand(n_flat, -1)
-    ).reshape(N, -1, 4)
-
     # --- Body-joint DOFs ---
     # Post-multiply each global rotation by YUP_TO_ZUP_DOF (120° cyclic), then
     # extract parent-relative locals.  This conjugates each local rotation by
     # ZUP_TO_YUP (the inverse), which cyclically permutes the rotation axes
     # X→Y, Y→Z, Z→X — mapping SMPL Y-up joint axes to MuJoCo Z-up joint axes.
+    #
+    # For "zup" (mpc_joints) format: global_rot[0] = q_mpc_root * YUP_TO_ZUP_DOF
+    #   = q_mpc_root * INTERX_ROOT_BASIS_CORRECTION = q_mujoco.
+    # So rotated_local_rot[0] already holds the correct MuJoCo root quaternion.
     rotated_global_rot_dof = quat_mul(
         global_rot.reshape(-1, 4),
         YUP_TO_ZUP_DOF.expand(n_flat, -1)
@@ -215,8 +229,22 @@ def convert_smpl_to_mimickit(input_file: str,
         PARENT_INDICES
     )
 
+    # --- FK positions (used only for z_correction) ---
+    if coord_system == "yup":
+        # Conjugation F*R*F^{-1} re-expresses global orientations in Z-up so that
+        # FK positions computed with LOCAL_TRANSLATION (Z-up) give world Z heights.
+        rotated_global_rot_for_fk = quat_mul(
+            quat_mul(YUP_TO_ZUP.expand(n_flat, -1), global_rot.reshape(-1, 4)),
+            YUP_TO_ZUP_INV.expand(n_flat, -1)
+        ).reshape(N, -1, 4)
+    else:
+        # "zup" (mpc_joints): rotated_local_rot[0] = q_mujoco (correct Z-up root).
+        # Recomputing global rotations from these Z-up local rotations yields the
+        # correct world-space orientations for FK height computation.
+        rotated_global_rot_for_fk = compute_global_rotations(rotated_local_rot, PARENT_INDICES)
+
     global_translation = compute_global_translations(
-        rotated_global_rot_zup,
+        rotated_global_rot_for_fk,
         torch.tensor(LOCAL_TRANSLATION, dtype=torch.float32),
         PARENT_INDICES
     ).numpy()
@@ -227,15 +255,23 @@ def convert_smpl_to_mimickit(input_file: str,
 
     root_rot_t = torch.tensor(root_rot, dtype=torch.float32)
     N_r = root_rot_t.shape[0]
-    # Conjugate to re-express in Z-up, then apply rest-pose correction (-90° around Z)
-    # so that the MuJoCo T-pose facing (+X) matches the converted SMPL T-pose.
-    rotated_root_rot_quat = quat_mul(
-        R_Z_NEG90.expand(N_r, -1),
-        quat_mul(
-            quat_mul(YUP_TO_ZUP.expand(N_r, -1), root_rot_t),
-            YUP_TO_ZUP_INV.expand(N_r, -1)
+    if coord_system == "yup":
+        # Conjugate to re-express in Z-up, then apply rest-pose correction (-90° around Z)
+        # so that the MuJoCo T-pose facing (+X) matches the converted SMPL T-pose.
+        rotated_root_rot_quat = quat_mul(
+            R_Z_NEG90.expand(N_r, -1),
+            quat_mul(
+                quat_mul(YUP_TO_ZUP.expand(N_r, -1), root_rot_t),
+                YUP_TO_ZUP_INV.expand(N_r, -1)
+            )
         )
-    )
+    else:
+        # "zup" / mpc_joints format: root_orient is stored as q_mujoco * inv(correction),
+        # so post-multiplying by INTERX_ROOT_BASIS_CORRECTION recovers the MuJoCo root.
+        rotated_root_rot_quat = quat_mul(
+            root_rot_t,
+            INTERX_ROOT_BASIS_CORRECTION.expand(N_r, -1)
+        )
     root_rot = quat_to_exp_map(rotated_root_rot_quat).numpy()
 
     # Z-correction
@@ -292,7 +328,11 @@ def main():
     parser.add_argument("--end_frame", type=int, default=-1, help="End frame for clipping (default: -1, uses all frames)")
     parser.add_argument("--output_fps", type=int, default=-1, help="Output frame rate (default: -1, uses source fps)")
     parser.add_argument("--input_fps", type=int, default=-1, help="Input frame rate override when not stored in the npz")
-    parser.add_argument("--z_correction", type=str, default="calibrate", choices=["none", "calibrate", "full"], help="Z-axis correction method (default: none)")
+    parser.add_argument("--z_correction", type=str, default="calibrate", choices=["none", "calibrate", "full"], help="Z-axis correction method (default: calibrate)")
+    parser.add_argument("--coord_system", type=str, default="yup", choices=["yup", "zup"],
+                        help="Input coordinate system: 'yup' for standard SMPL/InterX/AMASS (default), "
+                             "'zup' for mpc_joints format where trans is already in Z-up and "
+                             "root_orient uses the INTERX_ROOT_BASIS_CORRECTION convention.")
     
     args = parser.parse_args()
     
@@ -304,7 +344,8 @@ def main():
         end_frame=args.end_frame,
         output_fps=args.output_fps,
         z_correction=args.z_correction,
-        input_fps=args.input_fps
+        input_fps=args.input_fps,
+        coord_system=args.coord_system,
     )
 
 

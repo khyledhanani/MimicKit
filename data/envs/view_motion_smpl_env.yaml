@@ -9,4 +9,4 @@ root_height_obs: True
 
 key_bodies: ["L_Toe", "R_Toe", "Head", "L_Hand", "R_Hand"]
 
-motion_file: "data/motions/smpl/smpl_walk.pkl"
+motion_file: "dual_data/converted/G001T003A016R008_p2.pkl"
