@@ -1,0 +1,15 @@
+env_name: "view_motion_dual"
+
+char_file: "data/assets/smpl/smpl.xml"
+camera_mode: "track"
+
+episode_length: 20.0 # seconds
+global_obs: False
+root_height_obs: True
+
+key_bodies: ["L_Toe", "R_Toe", "Head", "L_Hand", "R_Hand"]
+
+motion_file_a: "dual_data/converted/p1_upper_back_symmetric.pkl"
+motion_file_b: "dual_data/converted/p2_upper_back_symmetric.pkl"
+
+init_pose: [0, 0, 0.9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1.5708, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.5708, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
