@@ -797,8 +797,8 @@ def compute_done(done_buf, time, ep_len, root_rot, body_pos, tar_root_rot, tar_b
                 # pose_termination_body_ids are body indices; subtract 1 since
                 # body_pos_rel already excludes the root (body 0).
                 term_ids = pose_termination_body_ids - 1
-                body_pos_rel = body_pos_rel[..., term_ids, :]
-                tar_body_pos_rel = tar_body_pos_rel[..., term_ids, :]
+                body_pos_rel = torch.index_select(body_pos_rel, -2, term_ids)
+                tar_body_pos_rel = torch.index_select(tar_body_pos_rel, -2, term_ids)
 
             body_pos_diff = tar_body_pos_rel - body_pos_rel
             body_pos_dist = torch.sum(body_pos_diff * body_pos_diff, dim=-1)
