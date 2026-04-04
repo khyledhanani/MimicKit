@@ -1,0 +1,7 @@
+--num_envs 64
+
+--engine_config data/engines/newton_engine.yaml
+--env_config data/envs/dual_deepmimic_smpl_upper_only_env.yaml
+--agent_config data/agents/deepmimic_smpl_ppo_agent.yaml
+
+--out_dir output/dual_deepmimic_smpl_upper_only/

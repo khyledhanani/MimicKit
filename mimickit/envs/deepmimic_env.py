@@ -36,6 +36,11 @@ class DeepMimicEnv(char_env.CharEnv):
         self._reward_root_pose_scale = env_config.get("reward_root_pose_scale")
         self._reward_root_vel_scale = env_config.get("reward_root_vel_scale")
         self._reward_key_pos_scale = env_config.get("reward_key_pos_scale")
+
+        self._reward_balance_w = env_config.get("reward_balance_w", 0.0)
+        self._reward_upright_w = env_config.get("reward_upright_w", 0.0)
+        self._reward_foot_contact_w = env_config.get("reward_foot_contact_w", 0.0)
+        self._target_root_height = env_config.get("target_root_height", 0.9)
         
         self._visualize_ref_char = env_config.get("visualize_ref_char", True)
         
@@ -103,6 +108,12 @@ class DeepMimicEnv(char_env.CharEnv):
         
         contact_bodies = env_config.get("contact_bodies", [])
         self._contact_body_ids = self._build_body_ids_tensor(contact_bodies)
+
+        pose_termination_bodies = env_config.get("pose_termination_bodies", [])
+        if len(pose_termination_bodies) > 0:
+            self._pose_termination_body_ids = self._build_body_ids_tensor(pose_termination_bodies)
+        else:
+            self._pose_termination_body_ids = torch.zeros(0, device=self._device, dtype=torch.long)
 
         joint_err_w = env_config.get("joint_err_w", None)
         self._parse_joint_err_weights(joint_err_w)
@@ -458,6 +469,21 @@ class DeepMimicEnv(char_env.CharEnv):
                                              root_pose_scale=self._reward_root_pose_scale,
                                              root_vel_scale=self._reward_root_vel_scale,
                                              key_pos_scale=self._reward_key_pos_scale)
+
+        if self._reward_balance_w > 0.0 or self._reward_upright_w > 0.0 or self._reward_foot_contact_w > 0.0:
+            ground_contact_forces = self._engine.get_ground_contact_forces(char_id)
+            aux_r = compute_auxiliary_reward(
+                root_pos=root_pos,
+                root_rot=root_rot,
+                ground_contact_force=ground_contact_forces,
+                contact_body_ids=self._contact_body_ids,
+                target_root_height=self._target_root_height,
+                balance_w=self._reward_balance_w,
+                upright_w=self._reward_upright_w,
+                foot_contact_w=self._reward_foot_contact_w,
+            )
+            self._reward_buf[:] += aux_r
+
         return
 
     def _update_done(self):
@@ -474,8 +500,8 @@ class DeepMimicEnv(char_env.CharEnv):
         ground_contact_forces = self._engine.get_ground_contact_forces(char_id)
 
         self._done_buf[:] = compute_done(done_buf=self._done_buf,
-                                         time=self._time_buf, 
-                                         ep_len=self._episode_length, 
+                                         time=self._time_buf,
+                                         ep_len=self._episode_length,
                                          root_rot=root_rot,
                                          body_pos=body_pos,
                                          tar_root_rot=self._ref_root_rot,
@@ -489,7 +515,8 @@ class DeepMimicEnv(char_env.CharEnv):
                                          motion_times=motion_times,
                                          motion_len=motion_len,
                                          motion_len_term=motion_len_term,
-                                         track_root=track_root)
+                                         track_root=track_root,
+                                         pose_termination_body_ids=self._pose_termination_body_ids)
         return
 
     def _update_info(self, env_ids=None):
@@ -721,18 +748,18 @@ def compute_deepmimic_obs(root_pos, root_rot, root_vel, root_ang_vel, joint_rot,
     return obs
 
 @torch.jit.script
-def compute_done(done_buf, time, ep_len, root_rot, body_pos, tar_root_rot, tar_body_pos, 
+def compute_done(done_buf, time, ep_len, root_rot, body_pos, tar_root_rot, tar_body_pos,
                  ground_contact_force, contact_body_ids,
-                 pose_termination, pose_termination_dist, 
+                 pose_termination, pose_termination_dist,
                  global_obs, enable_early_termination,
                  motion_times, motion_len, motion_len_term,
-                 track_root):
-    # type: (Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool, float, bool, bool, Tensor, Tensor, Tensor, bool) -> Tensor
+                 track_root, pose_termination_body_ids):
+    # type: (Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, bool, float, bool, bool, Tensor, Tensor, Tensor, bool, Tensor) -> Tensor
     done = torch.full_like(done_buf, base_env.DoneFlags.NULL.value)
-    
+
     timeout = time >= ep_len
     done[timeout] = base_env.DoneFlags.TIME.value
-    
+
     motion_end = motion_times >= motion_len
     motion_end = torch.logical_and(motion_end, motion_len_term)
     done[motion_end] = base_env.DoneFlags.SUCC.value
@@ -753,16 +780,27 @@ def compute_done(done_buf, time, ep_len, root_rot, body_pos, tar_root_rot, tar_b
             tar_root_pos = tar_body_pos[..., 0:1, :]
 
             if (not global_obs):
-                body_pos = body_pos[..., 1:, :] - root_pos
-                tar_body_pos = tar_body_pos[..., 1:, :] - tar_root_pos
-                body_pos = char_env.convert_to_local_root_body_pos(root_rot, body_pos)
-                tar_body_pos = char_env.convert_to_local_root_body_pos(tar_root_rot, tar_body_pos)
+                body_pos_rel = body_pos[..., 1:, :] - root_pos
+                tar_body_pos_rel = tar_body_pos[..., 1:, :] - tar_root_pos
+                body_pos_rel = char_env.convert_to_local_root_body_pos(root_rot, body_pos_rel)
+                tar_body_pos_rel = char_env.convert_to_local_root_body_pos(tar_root_rot, tar_body_pos_rel)
 
             elif (not track_root):
-                body_pos = body_pos[..., 1:, :] - root_pos
-                tar_body_pos = tar_body_pos[..., 1:, :] - tar_root_pos
+                body_pos_rel = body_pos[..., 1:, :] - root_pos
+                tar_body_pos_rel = tar_body_pos[..., 1:, :] - tar_root_pos
+            else:
+                body_pos_rel = body_pos[..., 1:, :]
+                tar_body_pos_rel = tar_body_pos[..., 1:, :]
 
-            body_pos_diff = tar_body_pos - body_pos
+            if pose_termination_body_ids.shape[0] > 0:
+                # Only check pose termination for specified bodies.
+                # pose_termination_body_ids are body indices; subtract 1 since
+                # body_pos_rel already excludes the root (body 0).
+                term_ids = pose_termination_body_ids - 1
+                body_pos_rel = body_pos_rel[..., term_ids, :]
+                tar_body_pos_rel = tar_body_pos_rel[..., term_ids, :]
+
+            body_pos_diff = tar_body_pos_rel - body_pos_rel
             body_pos_dist = torch.sum(body_pos_diff * body_pos_diff, dim=-1)
             body_pos_dist = torch.max(body_pos_dist, dim=-1)[0]
             pose_fail = body_pos_dist > pose_termination_dist * pose_termination_dist
@@ -775,13 +813,48 @@ def compute_done(done_buf, time, ep_len, root_rot, body_pos, tar_root_rot, tar_b
                 pose_fail = torch.logical_or(pose_fail, root_pos_fail)
 
             failed = torch.logical_or(failed, pose_fail)
-            
+
         # only fail after first timestep
         not_first_step = (time > 0.0)
         failed = torch.logical_and(failed, not_first_step)
         done[failed] = base_env.DoneFlags.FAIL.value
-    
+
     return done
+
+@torch.jit.script
+def compute_auxiliary_reward(root_pos, root_rot, ground_contact_force, contact_body_ids,
+                             target_root_height, balance_w, upright_w, foot_contact_w):
+    # type: (Tensor, Tensor, Tensor, Tensor, float, float, float, float) -> Tensor
+
+    r = torch.zeros(root_pos.shape[0], device=root_pos.device, dtype=root_pos.dtype)
+
+    # Balance reward: penalize root height deviation from target
+    if balance_w > 0.0:
+        root_h = root_pos[..., 2]
+        h_err = (root_h - target_root_height) * (root_h - target_root_height)
+        r_balance = torch.exp(-10.0 * h_err)
+        r = r + balance_w * r_balance
+
+    # Upright reward: dot product of body up-vector with world up [0,0,1]
+    if upright_w > 0.0:
+        up_world = torch.zeros(3, device=root_rot.device, dtype=root_rot.dtype)
+        up_world[2] = 1.0
+        body_up = torch_util.quat_rotate(root_rot, up_world.unsqueeze(0).expand(root_rot.shape[0], 3))
+        r_upright = torch.clamp(body_up[..., 2], min=0.0)
+        r = r + upright_w * r_upright
+
+    # Foot contact reward: at least one foot on the ground
+    if foot_contact_w > 0.0:
+        if contact_body_ids.shape[0] > 0:
+            foot_forces = ground_contact_force[:, contact_body_ids, :]
+            has_contact = torch.any(torch.abs(foot_forces) > 0.1, dim=-1)
+            any_foot_contact = torch.any(has_contact, dim=-1).float()
+            r = r + foot_contact_w * any_foot_contact
+        else:
+            r = r + foot_contact_w
+
+    return r
+
 
 @torch.jit.script
 def compute_reward(root_pos, root_rot, root_vel, root_ang_vel, joint_rot, dof_vel, key_pos,

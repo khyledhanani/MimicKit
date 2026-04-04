@@ -60,6 +60,11 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         self._reward_key_pos_scale = env_config.get("reward_key_pos_scale", 10.0)
         self._reward_rel_key_pos_scale = env_config.get("reward_rel_key_pos_scale", 10.0)
 
+        self._reward_balance_w = env_config.get("reward_balance_w", 0.0)
+        self._reward_upright_w = env_config.get("reward_upright_w", 0.0)
+        self._reward_foot_contact_w = env_config.get("reward_foot_contact_w", 0.0)
+        self._target_root_height = env_config.get("target_root_height", 0.9)
+
         super().__init__(
             env_config=env_config,
             engine_config=engine_config,
@@ -212,6 +217,14 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         self._key_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], key_bodies)
         self._contact_body_ids_a = self._build_body_ids_tensor(self._char_a_ids[0], env_config.get("contact_bodies", []))
         self._contact_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], env_config.get("contact_bodies", []))
+
+        pose_termination_bodies = env_config.get("pose_termination_bodies", [])
+        if len(pose_termination_bodies) > 0:
+            self._pose_termination_body_ids_a = self._build_body_ids_tensor(self._char_a_ids[0], pose_termination_bodies)
+            self._pose_termination_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], pose_termination_bodies)
+        else:
+            self._pose_termination_body_ids_a = torch.zeros(0, device=self._device, dtype=torch.long)
+            self._pose_termination_body_ids_b = torch.zeros(0, device=self._device, dtype=torch.long)
 
         self._parse_joint_err_weights(env_config.get("joint_err_w", None))
 
@@ -731,6 +744,25 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         if self._reward_contact_w > 0.0 and self._contact_body_ids_inter_a.numel() > 0:
             self._reward_buf[:] += self._reward_contact_w * self._compute_contact_reward()
 
+        if self._reward_balance_w > 0.0 or self._reward_upright_w > 0.0 or self._reward_foot_contact_w > 0.0:
+            gcf_a = self._engine.get_ground_contact_forces(a_id)
+            aux_a = deepmimic_env.compute_auxiliary_reward(
+                root_pos=root_pos_a, root_rot=root_rot_a,
+                ground_contact_force=gcf_a, contact_body_ids=self._contact_body_ids_a,
+                target_root_height=self._target_root_height,
+                balance_w=self._reward_balance_w, upright_w=self._reward_upright_w,
+                foot_contact_w=self._reward_foot_contact_w,
+            )
+            gcf_b = self._engine.get_ground_contact_forces(b_id)
+            aux_b = deepmimic_env.compute_auxiliary_reward(
+                root_pos=root_pos_b, root_rot=root_rot_b,
+                ground_contact_force=gcf_b, contact_body_ids=self._contact_body_ids_b,
+                target_root_height=self._target_root_height,
+                balance_w=self._reward_balance_w, upright_w=self._reward_upright_w,
+                foot_contact_w=self._reward_foot_contact_w,
+            )
+            self._reward_buf[:] += 0.5 * (aux_a + aux_b)
+
     def _compute_contact_reward(self):
         """Dense reward for actor A's contact bodies approaching actor B's contact bodies.
 
@@ -780,6 +812,7 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             motion_len=motion_len,
             motion_len_term=motion_len_term,
             track_root=track_root,
+            pose_termination_body_ids=self._pose_termination_body_ids_a,
         )
 
         b_id = self._char_b_ids[0]
@@ -801,6 +834,7 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             motion_len=motion_len,
             motion_len_term=motion_len_term,
             track_root=track_root,
+            pose_termination_body_ids=self._pose_termination_body_ids_b,
         )
 
         done = torch.full_like(self._done_buf, base_env.DoneFlags.NULL.value)
