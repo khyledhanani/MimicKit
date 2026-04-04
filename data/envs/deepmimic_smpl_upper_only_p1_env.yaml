@@ -13,13 +13,13 @@ camera_mode: "track"
 episode_length: 8.0
 global_obs: True
 root_height_obs: True
-pose_termination: True
-pose_termination_dist: 1.5  # relaxed vs full-body (was 1.0)
+pose_termination: False  # disabled initially — let agent learn to balance before penalizing pose divergence
+pose_termination_dist: 2.0
 enable_phase_obs: False
 enable_tar_obs: True
 num_phase_encoding: 4
 tar_obs_steps: [1, 2, 3]
-rand_reset: True
+rand_reset: False  # start from t=0 (stable standing); kinematic mid-motion poses are not physically stable
 
 ref_char_offset: [2.0, 0.0, 0.0]
 init_pose: [0, 0, 0.9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1.5708, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.5708, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
