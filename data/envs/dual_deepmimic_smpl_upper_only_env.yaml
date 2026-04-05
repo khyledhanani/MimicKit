@@ -13,20 +13,27 @@ camera_mode: "track"
 episode_length: 8.0
 global_obs: True
 root_height_obs: True
-pose_termination: True
-pose_termination_dist: 1.5  # relaxed vs full-body (was 1.0)
+pose_termination: False  # disabled initially — let agents learn to balance first
+pose_termination_dist: 2.0
 enable_early_termination: True
 enable_phase_obs: False
 enable_tar_obs: True
 num_phase_encoding: 4
 tar_obs_steps: [1, 2, 3]
-rand_reset: True
+rand_reset: False  # start from t=0 (stable standing); kinematic mid-motion poses aren't physically stable
 enable_self_collisions: True
 inter_actor_collisions: True
 control_mode: "dual"
 
 track_root_h: True
 track_root: True
+
+# Inter-actor contact reward: each agent's hands/forearms → partner's torso
+inter_actor_contact_bodies_a: ["L_Elbow", "L_Wrist", "L_Hand", "R_Elbow", "R_Wrist", "R_Hand"]
+inter_actor_contact_bodies_b: ["Torso", "Spine", "Chest"]
+reward_contact_w: 0.15
+reward_contact_scale: 10.0
+contact_dist_threshold: 0.1
 
 # Upper-body key bodies only (no toes)
 key_bodies: ["Head", "L_Hand", "R_Hand"]
