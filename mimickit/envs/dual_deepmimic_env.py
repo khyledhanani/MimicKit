@@ -359,7 +359,37 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         self._update_ref_motion(env_ids)
         self._sync_chars_to_ref(env_ids, sync_b=True)
 
+    def _cache_engine_state(self):
+        """Fetch engine state once per step and cache for obs/reward/done."""
+        a_id = self._char_a_ids[0]
+        b_id = self._char_b_ids[0]
+
+        self._s_root_pos_a = self._engine.get_root_pos(a_id)
+        self._s_root_rot_a = self._engine.get_root_rot(a_id)
+        self._s_root_vel_a = self._engine.get_root_vel(a_id)
+        self._s_root_ang_vel_a = self._engine.get_root_ang_vel(a_id)
+        self._s_dof_pos_a = self._engine.get_dof_pos(a_id)
+        self._s_dof_vel_a = self._engine.get_dof_vel(a_id)
+        self._s_body_pos_a = self._engine.get_body_pos(a_id)
+
+        self._s_root_pos_b = self._engine.get_root_pos(b_id)
+        self._s_root_rot_b = self._engine.get_root_rot(b_id)
+        self._s_root_vel_b = self._engine.get_root_vel(b_id)
+        self._s_root_ang_vel_b = self._engine.get_root_ang_vel(b_id)
+        self._s_dof_pos_b = self._engine.get_dof_pos(b_id)
+        self._s_dof_vel_b = self._engine.get_dof_vel(b_id)
+        self._s_body_pos_b = self._engine.get_body_pos(b_id)
+
+        # Pre-compute joint rotations (used in both obs and reward)
+        self._s_joint_rot_a = self._kin_char_model.dof_to_rot(self._s_dof_pos_a)
+        self._s_joint_rot_b = self._kin_char_model.dof_to_rot(self._s_dof_pos_b)
+
+        # Ground contact forces (used in reward and done)
+        self._s_gcf_a = self._engine.get_ground_contact_forces(a_id)
+        self._s_gcf_b = self._engine.get_ground_contact_forces(b_id)
+
     def _update_misc(self):
+        self._cache_engine_state()
         self._update_ref_motion(None)
         if self._control_mode == "single_a":
             self._sync_char_b_to_ref(None)
@@ -452,47 +482,66 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         self._engine.set_body_ang_vel(env_ids, self._char_a_ids[0], 0.0)
 
     def _compute_obs(self, env_ids=None):
-        a_id = self._char_a_ids[0]
-        b_id = self._char_b_ids[0]
-        root_pos_a = self._engine.get_root_pos(a_id)
-        root_rot_a = self._engine.get_root_rot(a_id)
-        root_vel_a = self._engine.get_root_vel(a_id)
-        root_ang_vel_a = self._engine.get_root_ang_vel(a_id)
-        dof_pos_a = self._engine.get_dof_pos(a_id)
-        dof_vel_a = self._engine.get_dof_vel(a_id)
-        body_pos_a = self._engine.get_body_pos(a_id)
-
-        root_pos_b = self._engine.get_root_pos(b_id)
-        root_rot_b = self._engine.get_root_rot(b_id)
-        root_vel_b = self._engine.get_root_vel(b_id)
-        root_ang_vel_b = self._engine.get_root_ang_vel(b_id)
-        dof_pos_b = self._engine.get_dof_pos(b_id)
-        dof_vel_b = self._engine.get_dof_vel(b_id)
-        body_pos_b = self._engine.get_body_pos(b_id)
-
-        if env_ids is not None:
-            root_pos_a = root_pos_a[env_ids]
-            root_rot_a = root_rot_a[env_ids]
-            root_vel_a = root_vel_a[env_ids]
-            root_ang_vel_a = root_ang_vel_a[env_ids]
-            dof_pos_a = dof_pos_a[env_ids]
-            dof_vel_a = dof_vel_a[env_ids]
-            body_pos_a = body_pos_a[env_ids]
-            root_pos_b = root_pos_b[env_ids]
-            root_rot_b = root_rot_b[env_ids]
-            root_vel_b = root_vel_b[env_ids]
-            root_ang_vel_b = root_ang_vel_b[env_ids]
-            dof_pos_b = dof_pos_b[env_ids]
-            dof_vel_b = dof_vel_b[env_ids]
-            body_pos_b = body_pos_b[env_ids]
-            motion_ids = self._motion_ids[env_ids]
-            motion_times = self._get_motion_times(env_ids)
+        has_cache = hasattr(self, '_s_root_pos_a')
+        if env_ids is not None or not has_cache:
+            # During reset or init: fetch directly from engine
+            a_id = self._char_a_ids[0]
+            b_id = self._char_b_ids[0]
+            root_pos_a = self._engine.get_root_pos(a_id)
+            root_rot_a = self._engine.get_root_rot(a_id)
+            root_vel_a = self._engine.get_root_vel(a_id)
+            root_ang_vel_a = self._engine.get_root_ang_vel(a_id)
+            dof_pos_a = self._engine.get_dof_pos(a_id)
+            dof_vel_a = self._engine.get_dof_vel(a_id)
+            body_pos_a = self._engine.get_body_pos(a_id)
+            root_pos_b = self._engine.get_root_pos(b_id)
+            root_rot_b = self._engine.get_root_rot(b_id)
+            root_vel_b = self._engine.get_root_vel(b_id)
+            root_ang_vel_b = self._engine.get_root_ang_vel(b_id)
+            dof_pos_b = self._engine.get_dof_pos(b_id)
+            dof_vel_b = self._engine.get_dof_vel(b_id)
+            body_pos_b = self._engine.get_body_pos(b_id)
+            if env_ids is not None:
+                root_pos_a = root_pos_a[env_ids]
+                root_rot_a = root_rot_a[env_ids]
+                root_vel_a = root_vel_a[env_ids]
+                root_ang_vel_a = root_ang_vel_a[env_ids]
+                dof_pos_a = dof_pos_a[env_ids]
+                dof_vel_a = dof_vel_a[env_ids]
+                body_pos_a = body_pos_a[env_ids]
+                root_pos_b = root_pos_b[env_ids]
+                root_rot_b = root_rot_b[env_ids]
+                root_vel_b = root_vel_b[env_ids]
+                root_ang_vel_b = root_ang_vel_b[env_ids]
+                dof_pos_b = dof_pos_b[env_ids]
+                dof_vel_b = dof_vel_b[env_ids]
+                body_pos_b = body_pos_b[env_ids]
+            joint_rot_a = self._kin_char_model.dof_to_rot(dof_pos_a)
+            joint_rot_b = self._kin_char_model.dof_to_rot(dof_pos_b)
+            if env_ids is not None:
+                motion_ids = self._motion_ids[env_ids]
+                motion_times = self._get_motion_times(env_ids)
+            else:
+                motion_ids = self._motion_ids
+                motion_times = self._get_motion_times()
         else:
+            # During step: use cached state
+            root_pos_a = self._s_root_pos_a
+            root_rot_a = self._s_root_rot_a
+            root_vel_a = self._s_root_vel_a
+            root_ang_vel_a = self._s_root_ang_vel_a
+            dof_vel_a = self._s_dof_vel_a
+            body_pos_a = self._s_body_pos_a
+            root_pos_b = self._s_root_pos_b
+            root_rot_b = self._s_root_rot_b
+            root_vel_b = self._s_root_vel_b
+            root_ang_vel_b = self._s_root_ang_vel_b
+            dof_vel_b = self._s_dof_vel_b
+            body_pos_b = self._s_body_pos_b
+            joint_rot_a = self._s_joint_rot_a
+            joint_rot_b = self._s_joint_rot_b
             motion_ids = self._motion_ids
             motion_times = self._get_motion_times()
-
-        joint_rot_a = self._kin_char_model.dof_to_rot(dof_pos_a)
-        joint_rot_b = self._kin_char_model.dof_to_rot(dof_pos_b)
 
         key_pos_a = body_pos_a[..., self._key_body_ids_a, :] if self._key_body_ids_a.numel() > 0 else torch.zeros([0], device=self._device)
         key_pos_b = body_pos_b[..., self._key_body_ids_b, :] if self._key_body_ids_b.numel() > 0 else torch.zeros([0], device=self._device)
@@ -646,17 +695,13 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             self._engine.set_cmd(self._char_b_ids[0], act_b)
 
     def _update_reward(self):
-        a_id = self._char_a_ids[0]
-        b_id = self._char_b_ids[0]
-
-        root_pos_a = self._engine.get_root_pos(a_id)
-        root_rot_a = self._engine.get_root_rot(a_id)
-        root_vel_a = self._engine.get_root_vel(a_id)
-        root_ang_vel_a = self._engine.get_root_ang_vel(a_id)
-        dof_pos_a = self._engine.get_dof_pos(a_id)
-        dof_vel_a = self._engine.get_dof_vel(a_id)
-        body_pos_a = self._engine.get_body_pos(a_id)
-        joint_rot_a = self._kin_char_model.dof_to_rot(dof_pos_a)
+        root_pos_a = self._s_root_pos_a
+        root_rot_a = self._s_root_rot_a
+        root_vel_a = self._s_root_vel_a
+        root_ang_vel_a = self._s_root_ang_vel_a
+        dof_vel_a = self._s_dof_vel_a
+        body_pos_a = self._s_body_pos_a
+        joint_rot_a = self._s_joint_rot_a
         key_pos_a = body_pos_a[..., self._key_body_ids_a, :] if self._key_body_ids_a.numel() > 0 else torch.zeros([0], device=self._device)
         tar_key_pos_a = self._ref_body_pos_a[..., self._key_body_ids_a, :] if self._key_body_ids_a.numel() > 0 else torch.zeros([0], device=self._device)
         rew_a = deepmimic_env.compute_reward(
@@ -690,14 +735,13 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             self._reward_key_pos_scale,
         )
 
-        root_pos_b = self._engine.get_root_pos(b_id)
-        root_rot_b = self._engine.get_root_rot(b_id)
-        root_vel_b = self._engine.get_root_vel(b_id)
-        root_ang_vel_b = self._engine.get_root_ang_vel(b_id)
-        dof_pos_b = self._engine.get_dof_pos(b_id)
-        dof_vel_b = self._engine.get_dof_vel(b_id)
-        body_pos_b = self._engine.get_body_pos(b_id)
-        joint_rot_b = self._kin_char_model.dof_to_rot(dof_pos_b)
+        root_pos_b = self._s_root_pos_b
+        root_rot_b = self._s_root_rot_b
+        root_vel_b = self._s_root_vel_b
+        root_ang_vel_b = self._s_root_ang_vel_b
+        dof_vel_b = self._s_dof_vel_b
+        body_pos_b = self._s_body_pos_b
+        joint_rot_b = self._s_joint_rot_b
         key_pos_b = body_pos_b[..., self._key_body_ids_b, :] if self._key_body_ids_b.numel() > 0 else torch.zeros([0], device=self._device)
         tar_key_pos_b = self._ref_body_pos_b[..., self._key_body_ids_b, :] if self._key_body_ids_b.numel() > 0 else torch.zeros([0], device=self._device)
         rew_b = deepmimic_env.compute_reward(
@@ -745,18 +789,16 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             self._reward_buf[:] += self._reward_contact_w * self._compute_contact_reward()
 
         if self._reward_balance_w > 0.0 or self._reward_upright_w > 0.0 or self._reward_foot_contact_w > 0.0:
-            gcf_a = self._engine.get_ground_contact_forces(a_id)
             aux_a = deepmimic_env.compute_auxiliary_reward(
                 root_pos=root_pos_a, root_rot=root_rot_a,
-                ground_contact_force=gcf_a, contact_body_ids=self._contact_body_ids_a,
+                ground_contact_force=self._s_gcf_a, contact_body_ids=self._contact_body_ids_a,
                 target_root_height=self._target_root_height,
                 balance_w=self._reward_balance_w, upright_w=self._reward_upright_w,
                 foot_contact_w=self._reward_foot_contact_w,
             )
-            gcf_b = self._engine.get_ground_contact_forces(b_id)
             aux_b = deepmimic_env.compute_auxiliary_reward(
                 root_pos=root_pos_b, root_rot=root_rot_b,
-                ground_contact_force=gcf_b, contact_body_ids=self._contact_body_ids_b,
+                ground_contact_force=self._s_gcf_b, contact_body_ids=self._contact_body_ids_b,
                 target_root_height=self._target_root_height,
                 balance_w=self._reward_balance_w, upright_w=self._reward_upright_w,
                 foot_contact_w=self._reward_foot_contact_w,
@@ -769,8 +811,8 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         Returns a scalar per env in [0, 1] based on minimum pairwise distance
         between the two body sets, shaped as exp(-scale * min_dist).
         """
-        body_pos_a = self._engine.get_body_pos(self._char_a_ids[0])  # [n, n_bodies, 3]
-        body_pos_b = self._engine.get_body_pos(self._char_b_ids[0])
+        body_pos_a = self._s_body_pos_a  # [n, n_bodies, 3]
+        body_pos_b = self._s_body_pos_b
 
         pos_a = body_pos_a[..., self._contact_body_ids_inter_a, :]  # [n, n_ca, 3]
         pos_b = body_pos_b[..., self._contact_body_ids_inter_b, :]  # [n, n_cb, 3]
@@ -793,16 +835,15 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         motion_len_term = torch.logical_and(motion_len_term_a, motion_len_term_b)
         track_root = self._track_global_root()
 
-        a_id = self._char_a_ids[0]
         done_a = deepmimic_env.compute_done(
             done_buf=self._done_buf,
             time=self._time_buf,
             ep_len=self._episode_length,
-            root_rot=self._engine.get_root_rot(a_id),
-            body_pos=self._engine.get_body_pos(a_id),
+            root_rot=self._s_root_rot_a,
+            body_pos=self._s_body_pos_a,
             tar_root_rot=self._ref_root_rot_a,
             tar_body_pos=self._ref_body_pos_a,
-            ground_contact_force=self._engine.get_ground_contact_forces(a_id),
+            ground_contact_force=self._s_gcf_a,
             contact_body_ids=self._contact_body_ids_a,
             pose_termination=self._pose_termination,
             pose_termination_dist=self._pose_termination_dist,
@@ -815,16 +856,15 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             pose_termination_body_ids=self._pose_termination_body_ids_a,
         )
 
-        b_id = self._char_b_ids[0]
         done_b = deepmimic_env.compute_done(
             done_buf=self._done_buf,
             time=self._time_buf,
             ep_len=self._episode_length,
-            root_rot=self._engine.get_root_rot(b_id),
-            body_pos=self._engine.get_body_pos(b_id),
+            root_rot=self._s_root_rot_b,
+            body_pos=self._s_body_pos_b,
             tar_root_rot=self._ref_root_rot_b,
             tar_body_pos=self._ref_body_pos_b,
-            ground_contact_force=self._engine.get_ground_contact_forces(b_id),
+            ground_contact_force=self._s_gcf_b,
             contact_body_ids=self._contact_body_ids_b,
             pose_termination=self._pose_termination,
             pose_termination_dist=self._pose_termination_dist,

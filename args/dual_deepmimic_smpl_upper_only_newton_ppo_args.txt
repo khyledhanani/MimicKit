@@ -1,4 +1,4 @@
---num_envs 64
+--num_envs 8192
 
 --engine_config data/engines/newton_engine.yaml
 --env_config data/envs/dual_deepmimic_smpl_upper_only_env.yaml
