@@ -1,0 +1,84 @@
+env_name: "dual_deepmimic"
+
+char_file_a: "data/assets/g1/g1.xml"
+char_file_b: "data/assets/smpl/human_variants/fat.xml"
+camera_mode: "track"
+
+episode_length: 8.0
+global_obs: True
+root_height_obs: True
+pose_termination: False
+pose_termination_dist: 2.0
+enable_early_termination: True
+enable_phase_obs: False
+enable_tar_obs: True
+num_phase_encoding: 4
+tar_obs_steps: [1, 2, 3]
+rand_reset: False
+# Mesh-heavy human variants can trigger Newton/MuJoCo contact bitmask overflow with self collisions.
+enable_self_collisions: False
+inter_actor_collisions: True
+control_mode: "dual"
+
+track_root_h: True
+track_root: True
+
+inter_actor_contact_bodies_a: ["left_elbow_link", "left_wrist_roll_link", "left_wrist_pitch_link", "left_wrist_yaw_link",
+                               "right_elbow_link", "right_wrist_roll_link", "right_wrist_pitch_link", "right_wrist_yaw_link"]
+inter_actor_contact_bodies_b: ["Torso", "Spine", "Chest"]
+reward_contact_w: 0.1
+reward_contact_scale: 10.0
+contact_dist_threshold: 0.1
+
+key_bodies_a: ["head_link", "left_wrist_yaw_link", "right_wrist_yaw_link"]
+key_bodies_b: ["Head", "L_Wrist", "R_Wrist"]
+
+contact_bodies_a: ["left_ankle_roll_link", "right_ankle_roll_link"]
+contact_bodies_b: ["L_Ankle", "L_Toe", "R_Ankle", "R_Toe"]
+
+pose_termination_bodies_a: ["torso_link", "head_link",
+                            "left_shoulder_pitch_link", "left_shoulder_roll_link", "left_shoulder_yaw_link", "left_elbow_link", "left_wrist_yaw_link",
+                            "right_shoulder_pitch_link", "right_shoulder_roll_link", "right_shoulder_yaw_link", "right_elbow_link", "right_wrist_yaw_link"]
+pose_termination_bodies_b: ["Torso", "Spine", "Chest", "Neck", "Head",
+                            "L_Thorax", "L_Shoulder", "L_Elbow", "L_Wrist",
+                            "R_Thorax", "R_Shoulder", "R_Elbow", "R_Wrist"]
+
+motion_file_a: "dual_data/converted/egohuman_g1_fat_g1.pkl"
+motion_file_b: "dual_data/converted/egohuman_g1_fat_fat.pkl"
+
+init_pose_a: [0.0, 0.0, 0.85]
+init_pose_b: [0.0, 0.0, 0.93]
+
+# Joint error weights:
+# - G1: zero hips/knees/ankles, keep waist + upper body
+# - fat: zero hips/knees/ankles/toes, keep torso + upper body
+joint_err_w_a: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                1.0, 1.0, 1.0, 1.0,
+                1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+joint_err_w_b: [0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0,
+                1.0, 1.0, 1.0, 1.0, 1.0,
+                1.0, 1.0, 1.0, 1.0,
+                1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+reward_pose_w: 0.4
+reward_vel_w: 0.05
+reward_root_pose_w: 0.15
+reward_root_vel_w: 0.05
+reward_key_pos_w: 0.1
+reward_rel_key_pos_w: 0.05
+
+reward_pose_scale: 0.25
+reward_vel_scale: 0.01
+reward_root_pose_scale: 5.0
+reward_root_vel_scale: 1.0
+reward_key_pos_scale: 10.0
+reward_rel_key_pos_scale: 10.0
+
+reward_balance_w: 0.0
+reward_upright_w: 0.0
+reward_foot_contact_w: 0.0
+target_root_height: 0.9

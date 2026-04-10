@@ -1,6 +1,7 @@
 import argparse
 import copy
 import os
+import pickle
 import sys
 import xml.etree.ElementTree as ET
 
@@ -60,10 +61,149 @@ def _parse_loop_mode(loop_mode: str) -> LoopMode:
     raise ValueError(f"Unsupported loop mode: {loop_mode}")
 
 
-def qpos_to_motion(qpos: np.ndarray, fps: int, loop_mode: LoopMode) -> Motion:
+def _build_char_model(char_file: str, device: str = "cpu"):
+    _, file_ext = os.path.splitext(char_file)
+    if file_ext == ".xml":
+        import mimickit.anim.mjcf_char_model as mjcf_char_model
+
+        model = mjcf_char_model.MJCFCharModel(device)
+    elif file_ext == ".urdf":
+        import mimickit.anim.urdf_char_model as urdf_char_model
+
+        model = urdf_char_model.URDFCharModel(device)
+    elif file_ext == ".usd":
+        import mimickit.anim.usd_char_model as usd_char_model
+
+        model = usd_char_model.USDCharModel(device)
+    else:
+        raise ValueError(f"Unsupported character file format: {file_ext}")
+
+    model.load(char_file)
+    return model
+
+
+def _load_bundle(input_file: str):
+    _, ext = os.path.splitext(input_file)
+    if ext == ".npz":
+        return np.load(input_file, allow_pickle=True)
+    if ext in (".pkl", ".pickle"):
+        with open(input_file, "rb") as f:
+            return pickle.load(f)
+    raise ValueError(f"Unsupported bundle format: {ext}")
+
+
+def _bundle_has(data, key: str) -> bool:
+    if hasattr(data, "files"):
+        return key in data.files
+    return key in data
+
+
+def _bundle_get(data, key: str):
+    if hasattr(data, "files"):
+        return data[key]
+    return data[key]
+
+
+def _bundle_get_first(data, keys: list[str], field_name: str):
+    for key in keys:
+        if _bundle_has(data, key):
+            return _bundle_get(data, key), key
+    raise KeyError(f"Could not find {field_name}. Tried keys: {keys}")
+
+
+def _to_str(value) -> str:
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "item"):
+        try:
+            return str(value.item())
+        except ValueError:
+            pass
+    return str(value)
+
+
+def _reorder_wxyz_to_xyzw(quat: np.ndarray) -> np.ndarray:
+    return quat[..., [1, 2, 3, 0]]
+
+
+def _resolve_actor_pose(
+    data,
+    *,
+    side: str,
+    qpos_key: str | None,
+    root_pos_key: str | None,
+    root_rot_key: str | None,
+    dof_pos_key: str | None,
+) -> tuple[np.ndarray, str]:
+    qpos_candidates = [qpos_key] if qpos_key is not None else [
+        f"qpos_{side}",
+        f"qpos_{side.upper()}",
+        f"qpos_{side.lower()}",
+    ]
+    for key in qpos_candidates:
+        if key is not None and _bundle_has(data, key):
+            qpos = np.asarray(_bundle_get(data, key), dtype=np.float32)
+            return qpos, f"qpos:{key}"
+
+    root_pos_candidates = [root_pos_key] if root_pos_key is not None else [
+        f"root_pos_{side}",
+        f"root_pos_{side.upper()}",
+        f"root_pos_{side.lower()}",
+    ]
+    root_rot_candidates = [root_rot_key] if root_rot_key is not None else [
+        f"root_rot_{side}",
+        f"root_rot_{side.upper()}",
+        f"root_rot_{side.lower()}",
+    ]
+    dof_pos_candidates = [dof_pos_key] if dof_pos_key is not None else [
+        f"dof_pos_{side}",
+        f"dof_pos_{side.upper()}",
+        f"dof_pos_{side.lower()}",
+    ]
+
+    root_pos, root_pos_src = _bundle_get_first(data, root_pos_candidates, f"root_pos for side {side}")
+    root_rot, root_rot_src = _bundle_get_first(data, root_rot_candidates, f"root_rot for side {side}")
+    dof_pos, dof_pos_src = _bundle_get_first(data, dof_pos_candidates, f"dof_pos for side {side}")
+
+    root_pos = np.asarray(root_pos, dtype=np.float32)
+    root_rot = np.asarray(root_rot, dtype=np.float32)
+    dof_pos = np.asarray(dof_pos, dtype=np.float32)
+    qpos = np.concatenate([root_pos, root_rot, dof_pos], axis=-1)
+    return qpos, f"split:{root_pos_src},{root_rot_src},{dof_pos_src}"
+
+
+def _validate_qpos_shape(qpos: np.ndarray, char_file: str, side: str) -> None:
+    char_model = _build_char_model(char_file)
+    expected = 7 + char_model.get_dof_size()
+    if qpos.ndim != 2:
+        raise ValueError(f"{side}: expected qpos to be rank-2, got shape {qpos.shape}")
+    if qpos.shape[1] != expected:
+        raise ValueError(
+            f"{side}: qpos width {qpos.shape[1]} does not match {char_file} "
+            f"(expected 7 + dof_size = {expected})"
+        )
+
+
+def qpos_to_motion(
+    qpos: np.ndarray,
+    fps: int,
+    loop_mode: LoopMode,
+    *,
+    quat_format: str,
+    root_basis_correction: str,
+) -> Motion:
     root_pos = qpos[:, :3]
-    root_quat = torch.tensor(qpos[:, 3:7], dtype=torch.float32)
-    root_quat = _canonicalize_root_quat(root_quat)
+    root_quat_np = qpos[:, 3:7]
+    if quat_format == "wxyz":
+        root_quat_np = _reorder_wxyz_to_xyzw(root_quat_np)
+    elif quat_format != "xyzw":
+        raise ValueError(f"Unsupported quaternion format: {quat_format}")
+
+    root_quat = torch.tensor(root_quat_np, dtype=torch.float32)
+    if root_basis_correction == "interx":
+        root_quat = _canonicalize_root_quat(root_quat)
+    elif root_basis_correction != "none":
+        raise ValueError(f"Unsupported root basis correction: {root_basis_correction}")
     dof_pos = qpos[:, 7:]
     root_expmap = quat_to_exp_map(root_quat).cpu().numpy()
     frames = np.concatenate([root_pos, root_expmap, dof_pos], axis=-1).astype(np.float32)
@@ -142,29 +282,85 @@ def convert_dual_bundle(
     input_file: str,
     output_motion_a: str,
     output_motion_b: str,
-    output_char_a: str,
-    output_char_b: str,
+    output_char_a: str | None,
+    output_char_b: str | None,
     scene_xml: str | None,
     loop_mode: str,
+    fps_key: str,
+    qpos_key_a: str | None,
+    qpos_key_b: str | None,
+    root_pos_key_a: str | None,
+    root_pos_key_b: str | None,
+    root_rot_key_a: str | None,
+    root_rot_key_b: str | None,
+    dof_pos_key_a: str | None,
+    dof_pos_key_b: str | None,
+    char_file_a: str | None,
+    char_file_b: str | None,
+    input_fps: int,
+    quat_format: str,
+    root_basis_correction: str,
 ) -> None:
-    data = np.load(input_file, allow_pickle=True)
-    required = ["qpos_A", "qpos_B", "fps"]
-    for key in required:
-        if key not in data.files:
-            raise KeyError(f"Missing required key {key} in {input_file}")
+    data = _load_bundle(input_file)
+    qpos_a, src_a = _resolve_actor_pose(
+        data,
+        side="A",
+        qpos_key=qpos_key_a,
+        root_pos_key=root_pos_key_a,
+        root_rot_key=root_rot_key_a,
+        dof_pos_key=dof_pos_key_a,
+    )
+    qpos_b, src_b = _resolve_actor_pose(
+        data,
+        side="B",
+        qpos_key=qpos_key_b,
+        root_pos_key=root_pos_key_b,
+        root_rot_key=root_rot_key_b,
+        dof_pos_key=dof_pos_key_b,
+    )
 
-    scene_xml = _infer_scene_xml(input_file, data, scene_xml)
-    prefix_a = str(data["dual_prefix_A"]) if "dual_prefix_A" in data.files else "A_"
-    prefix_b = str(data["dual_prefix_B"]) if "dual_prefix_B" in data.files else "B_"
+    try:
+        fps_entry, fps_src = _bundle_get_first(data, [fps_key, "fps", "mocap_framerate"], "fps")
+        fps = int(np.asarray(fps_entry).item())
+    except KeyError:
+        if input_fps <= 0:
+            raise
+        fps = int(input_fps)
+        fps_src = "cli:input_fps"
+
+    if char_file_a is not None:
+        _validate_qpos_shape(qpos_a, char_file_a, "A")
+    if char_file_b is not None:
+        _validate_qpos_shape(qpos_b, char_file_b, "B")
+
+    if output_char_a is not None or output_char_b is not None:
+        if output_char_a is None or output_char_b is None:
+            raise ValueError("Provide both --output_char_a and --output_char_b, or neither.")
+        if not hasattr(data, "files"):
+            raise ValueError("Auto-extracting character MJCFs is only supported for .npz bundles.")
+        scene_xml = _infer_scene_xml(input_file, data, scene_xml)
+        prefix_a = _to_str(data["dual_prefix_A"]) if "dual_prefix_A" in data.files else "A_"
+        prefix_b = _to_str(data["dual_prefix_B"]) if "dual_prefix_B" in data.files else "B_"
 
     motion_loop = _parse_loop_mode(loop_mode)
-    fps = int(data["fps"])
+    motion_a = qpos_to_motion(
+        qpos_a.astype(np.float32),
+        fps=fps,
+        loop_mode=motion_loop,
+        quat_format=quat_format,
+        root_basis_correction=root_basis_correction,
+    )
+    motion_b = qpos_to_motion(
+        qpos_b.astype(np.float32),
+        fps=fps,
+        loop_mode=motion_loop,
+        quat_format=quat_format,
+        root_basis_correction=root_basis_correction,
+    )
 
-    motion_a = qpos_to_motion(data["qpos_A"].astype(np.float32), fps=fps, loop_mode=motion_loop)
-    motion_b = qpos_to_motion(data["qpos_B"].astype(np.float32), fps=fps, loop_mode=motion_loop)
-
-    extract_single_char_mjcf(scene_xml, f"{prefix_a}Pelvis", output_char_a)
-    extract_single_char_mjcf(scene_xml, f"{prefix_b}Pelvis", output_char_b)
+    if output_char_a is not None:
+        extract_single_char_mjcf(scene_xml, f"{prefix_a}Pelvis", output_char_a)
+        extract_single_char_mjcf(scene_xml, f"{prefix_b}Pelvis", output_char_b)
 
     _ensure_dir(output_motion_a)
     _ensure_dir(output_motion_b)
@@ -173,21 +369,56 @@ def convert_dual_bundle(
 
     print(f"Saved motion A to {output_motion_a}")
     print(f"Saved motion B to {output_motion_b}")
-    print(f"Saved char A asset to {output_char_a}")
-    print(f"Saved char B asset to {output_char_b}")
+    print(f"Source A: {src_a}")
+    print(f"Source B: {src_b}")
+    print(f"FPS source: {fps_src}")
+    if char_file_a is not None:
+        print(f"Validated A against {char_file_a}")
+    if char_file_b is not None:
+        print(f"Validated B against {char_file_b}")
+    if output_char_a is not None:
+        print(f"Saved char A asset to {output_char_a}")
+        print(f"Saved char B asset to {output_char_b}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Convert interx_h2h qpos bundles into MimicKit Motion files and matching MJCF assets."
+        description=(
+            "Convert dual retarget bundles into MimicKit Motion files. "
+            "Supports qpos_A/qpos_B bundles and split root_pos/root_rot/dof_pos schemas."
+        )
     )
-    parser.add_argument("--input_file", required=True, help="Path to the interx_h2h dual npz bundle")
+    parser.add_argument("--input_file", required=True, help="Path to the dual retarget bundle (.npz or .pkl)")
     parser.add_argument("--output_motion_a", required=True, help="Output path for character A motion pkl")
     parser.add_argument("--output_motion_b", required=True, help="Output path for character B motion pkl")
-    parser.add_argument("--output_char_a", required=True, help="Output path for character A MJCF xml")
-    parser.add_argument("--output_char_b", required=True, help="Output path for character B MJCF xml")
+    parser.add_argument("--output_char_a", default=None, help="Optional output path for extracted character A MJCF xml")
+    parser.add_argument("--output_char_b", default=None, help="Optional output path for extracted character B MJCF xml")
     parser.add_argument("--scene_xml", default=None, help="Optional override for the dual scene xml")
     parser.add_argument("--loop", default="clamp", choices=["wrap", "clamp"], help="Loop mode")
+    parser.add_argument("--fps_key", default="fps", help="Preferred key for fps lookup")
+    parser.add_argument("--qpos_key_a", default=None, help="Override key for A qpos array")
+    parser.add_argument("--qpos_key_b", default=None, help="Override key for B qpos array")
+    parser.add_argument("--root_pos_key_a", default=None, help="Override key for A root positions")
+    parser.add_argument("--root_pos_key_b", default=None, help="Override key for B root positions")
+    parser.add_argument("--root_rot_key_a", default=None, help="Override key for A root quaternions")
+    parser.add_argument("--root_rot_key_b", default=None, help="Override key for B root quaternions")
+    parser.add_argument("--dof_pos_key_a", default=None, help="Override key for A dof positions")
+    parser.add_argument("--dof_pos_key_b", default=None, help="Override key for B dof positions")
+    parser.add_argument("--char_file_a", default=None, help="Optional target rig for validating motion A width")
+    parser.add_argument("--char_file_b", default=None, help="Optional target rig for validating motion B width")
+    parser.add_argument("--input_fps", type=int, default=-1, help="Fallback fps when bundle metadata is missing")
+    parser.add_argument(
+        "--quat_format",
+        default="xyzw",
+        choices=["xyzw", "wxyz"],
+        help="Quaternion layout used by root rotations in the input bundle",
+    )
+    parser.add_argument(
+        "--root_basis_correction",
+        default="interx",
+        choices=["interx", "none"],
+        help="Apply InterX-style root basis correction before writing MimicKit frames",
+    )
     args = parser.parse_args()
 
     convert_dual_bundle(
@@ -198,6 +429,20 @@ def main() -> None:
         output_char_b=args.output_char_b,
         scene_xml=args.scene_xml,
         loop_mode=args.loop,
+        fps_key=args.fps_key,
+        qpos_key_a=args.qpos_key_a,
+        qpos_key_b=args.qpos_key_b,
+        root_pos_key_a=args.root_pos_key_a,
+        root_pos_key_b=args.root_pos_key_b,
+        root_rot_key_a=args.root_rot_key_a,
+        root_rot_key_b=args.root_rot_key_b,
+        dof_pos_key_a=args.dof_pos_key_a,
+        dof_pos_key_b=args.dof_pos_key_b,
+        char_file_a=args.char_file_a,
+        char_file_b=args.char_file_b,
+        input_fps=args.input_fps,
+        quat_format=args.quat_format,
+        root_basis_correction=args.root_basis_correction,
     )
 
 

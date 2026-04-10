@@ -1,0 +1,7 @@
+--num_envs 512
+
+--engine_config data/engines/newton_engine.yaml
+--env_config data/envs/dual_deepmimic_g1_fat_env.yaml
+--agent_config data/agents/deepmimic_g1_ppo_agent.yaml
+
+--out_dir output/dual_deepmimic_g1_fat/

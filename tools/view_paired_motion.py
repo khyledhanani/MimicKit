@@ -26,7 +26,19 @@ def load_yaml(path):
 
 
 def build_char_model(char_file, device):
-    model = mjcf_char_model.MJCFCharModel(device)
+    _, file_ext = os.path.splitext(char_file)
+    if file_ext == ".xml":
+        model = mjcf_char_model.MJCFCharModel(device)
+    elif file_ext == ".urdf":
+        import anim.urdf_char_model as urdf_char_model
+
+        model = urdf_char_model.URDFCharModel(device)
+    elif file_ext == ".usd":
+        import anim.usd_char_model as usd_char_model
+
+        model = usd_char_model.USDCharModel(device)
+    else:
+        raise ValueError(f"Unsupported character file format: {file_ext}")
     model.load(char_file)
     return model
 
@@ -56,7 +68,9 @@ def sample_motion(motion_library, motion_time):
 def main():
     parser = argparse.ArgumentParser(description="Visualize two MimicKit motion clips in sync.")
     parser.add_argument("--engine_config", default="data/engines/newton_engine.yaml")
-    parser.add_argument("--char_file", default="data/assets/smpl/smpl.xml")
+    parser.add_argument("--char_file", default=None, help="Shared character file fallback for both actors")
+    parser.add_argument("--char_file_a", default=None, help="Character asset for motion A")
+    parser.add_argument("--char_file_b", default=None, help="Character asset for motion B")
     parser.add_argument("--motion_file_a", required=True)
     parser.add_argument("--motion_file_b", required=True)
     parser.add_argument("--device", default="cpu")
@@ -69,6 +83,10 @@ def main():
 
     repeat = args.repeat.lower() in ("1", "true", "t", "yes", "y")
     device = args.device
+    char_file_a = args.char_file_a or args.char_file
+    char_file_b = args.char_file_b or args.char_file
+    if char_file_a is None or char_file_b is None:
+        raise ValueError("Provide --char_file for a shared rig, or both --char_file_a and --char_file_b.")
 
     engine_config = load_yaml(args.engine_config)
     engine_config["sim_freq"] = engine_config["control_freq"]
@@ -76,16 +94,17 @@ def main():
         engine_config, num_envs=1, device=device, visualize=True
     )
 
-    char_model = build_char_model(args.char_file, device)
-    motion_a = motion_lib.MotionLib(args.motion_file_a, char_model, device)
-    motion_b = motion_lib.MotionLib(args.motion_file_b, char_model, device)
+    char_model_a = build_char_model(char_file_a, device)
+    char_model_b = build_char_model(char_file_b, device)
+    motion_a = motion_lib.MotionLib(args.motion_file_a, char_model_a, device)
+    motion_b = motion_lib.MotionLib(args.motion_file_b, char_model_b, device)
 
     env_id = sim_engine.create_env()
     assert env_id == 0
     char_a = sim_engine.create_obj(
         env_id=env_id,
         obj_type=engine.ObjType.articulated,
-        asset_file=args.char_file,
+        asset_file=char_file_a,
         name="character_a",
         is_visual=True,
         enable_self_collisions=False,
@@ -95,7 +114,7 @@ def main():
     char_b = sim_engine.create_obj(
         env_id=env_id,
         obj_type=engine.ObjType.articulated,
-        asset_file=args.char_file,
+        asset_file=char_file_b,
         name="character_b",
         is_visual=True,
         enable_self_collisions=False,
@@ -133,8 +152,8 @@ def main():
             joint_dof_a = motion_a.joint_rot_to_dof(joint_rot_a)
             joint_dof_b = motion_b.joint_rot_to_dof(joint_rot_b)
 
-            set_char_pose(sim_engine, char_model, char_a, root_pos_a, root_rot_a, joint_rot_a, joint_dof_a)
-            set_char_pose(sim_engine, char_model, char_b, root_pos_b, root_rot_b, joint_rot_b, joint_dof_b)
+            set_char_pose(sim_engine, char_model_a, char_a, root_pos_a, root_rot_a, joint_rot_a, joint_dof_a)
+            set_char_pose(sim_engine, char_model_b, char_b, root_pos_b, root_rot_b, joint_rot_b, joint_dof_b)
 
             midpoint = 0.5 * (root_pos_a[0].cpu().numpy() + root_pos_b[0].cpu().numpy())
             cam_pos = np.array(

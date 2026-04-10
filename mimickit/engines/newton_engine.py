@@ -1219,14 +1219,22 @@ class NewtonEngine(engine.Engine):
             verbose=True,
         )
 
-        # net_force shape: [n_sensing_bodies_total, 2, 3]
-        #   index 0 = force from counterpart (B bodies)
-        #   index 1 = total force on sensing body
+        # Newton v1.0.0: net_force shape is [n_sensing_total, n_counterpart_per_env + 1, 3]
+        # when include_total=True (last entry = total force on sensing body).
+        # Without include_total: [n_sensing_total, n_counterpart_per_env, 3].
+        n_b_per_env = len(all_indices_b) // num_envs
         raw = wp.to_torch(self._inter_actor_contact_sensor.net_force)
-        # Reshape to [num_envs, n_a_per_env, 2, 3] then expose [env, body, 3] for counterpart
-        self._inter_actor_contact_forces_tensor = raw.view(num_envs, n_a_per_env, 2, 3)[..., 0, :]
+        n_cols = raw.shape[0] // (num_envs * n_a_per_env) if raw.dim() == 1 else raw.shape[1]
+        if raw.dim() == 1:
+            # Flat buffer: infer column count from total size
+            n_entries_per_sensing = raw.numel() // (num_envs * n_a_per_env * 3)
+            raw = raw.view(num_envs, n_a_per_env, n_entries_per_sensing, 3)
+        else:
+            raw = raw.view(num_envs, n_a_per_env, raw.shape[1], 3)
+        # Sum per-counterpart forces (indices 0..n_b-1), ignore total entry if present
+        self._inter_actor_contact_forces_tensor = raw[..., :n_b_per_env, :].sum(dim=-2)
         Logger.print("Inter-actor contact sensor: {:d} sensing bodies x {:d} counterpart bodies per env".format(
-            n_a_per_env, len(all_indices_b) // num_envs))
+            n_a_per_env, n_b_per_env))
         return
 
     def _update_contact_sensors(self):

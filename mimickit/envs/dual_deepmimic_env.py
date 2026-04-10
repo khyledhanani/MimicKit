@@ -78,9 +78,101 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         self._print_char_prop(0, self._char_b_ids[0], "B")
         self._validate_envs()
 
+    def _get_char_file(self, env_config, side):
+        side = side.lower()
+        shared_char_file = env_config.get("char_file", None)
+        return env_config.get(f"char_file_{side}", shared_char_file)
+
+    def _get_side_body_names(self, env_config, base_key, side):
+        side_key = f"{base_key}_{side.lower()}"
+        return env_config.get(side_key, env_config.get(base_key, []))
+
+    def _build_kin_char_model_for_file(self, char_file):
+        _, file_ext = os.path.splitext(char_file)
+        if file_ext == ".xml":
+            import anim.mjcf_char_model as mjcf_char_model
+
+            model = mjcf_char_model.MJCFCharModel(self._device)
+        elif file_ext == ".urdf":
+            import anim.urdf_char_model as urdf_char_model
+
+            model = urdf_char_model.URDFCharModel(self._device)
+        elif file_ext == ".usd":
+            import anim.usd_char_model as usd_char_model
+
+            model = usd_char_model.USDCharModel(self._device)
+        else:
+            raise ValueError("Unsupported character file format: {}".format(file_ext))
+        model.load(char_file)
+        return model
+
+    def _parse_init_pose(self, init_pose, kin_char_model, device):
+        dof_size = kin_char_model.get_dof_size()
+        if init_pose is None:
+            init_pose = torch.zeros(6 + dof_size, dtype=torch.float32, device=device)
+        else:
+            init_pose = torch.tensor(init_pose, dtype=torch.float32, device=device)
+            if init_pose.shape[-1] == 3:
+                init_pose = torch.cat([init_pose, torch.zeros(3 + dof_size, device=device)], dim=-1)
+
+        init_root_pos, init_root_rot, init_dof_pos = motion_lib.extract_pose_data(init_pose)
+        init_root_rot = torch_util.exp_map_to_quat(init_root_rot)
+        return init_root_pos, init_root_rot, init_dof_pos
+
+    def _parse_joint_err_weights_for_model(self, kin_char_model, joint_err_w):
+        num_joints = kin_char_model.get_num_joints()
+        if joint_err_w is None:
+            joint_err_w = torch.ones(num_joints - 1, device=self._device, dtype=torch.float32)
+        else:
+            joint_err_w = torch.tensor(joint_err_w, device=self._device, dtype=torch.float32)
+
+        assert joint_err_w.shape[-1] == num_joints - 1
+
+        dof_size = kin_char_model.get_dof_size()
+        dof_err_w = torch.zeros(dof_size, device=self._device, dtype=torch.float32)
+        for j in range(1, num_joints):
+            dim = kin_char_model.get_joint_dof_dim(j)
+            if dim > 0:
+                idx = kin_char_model.get_joint_dof_idx(j)
+                dof_err_w[idx : idx + dim] = joint_err_w[j - 1]
+
+        return joint_err_w, dof_err_w
+
+    def _build_action_bounds_single(self, char_id, kin_char_model, control_mode):
+        if control_mode == engine.ControlMode.none:
+            action_size = int(self._engine.get_dof_pos(char_id).shape[-1])
+            low = -np.ones(action_size, dtype=np.float32)
+            high = np.ones(action_size, dtype=np.float32)
+        elif control_mode == engine.ControlMode.vel:
+            action_size = int(self._engine.get_dof_pos(char_id).shape[-1])
+            low = -2.0 * np.pi * np.ones(action_size, dtype=np.float32)
+            high = 2.0 * np.pi * np.ones(action_size, dtype=np.float32)
+        elif control_mode == engine.ControlMode.torque:
+            torque_lim = self._engine.get_obj_torque_limits(0, char_id)
+            low = -np.array(torque_lim, dtype=np.float32)
+            high = np.array(torque_lim, dtype=np.float32)
+        elif control_mode in (engine.ControlMode.pos, engine.ControlMode.pd_explicit):
+            dof_low, dof_high = self._engine.get_obj_dof_limits(0, char_id)
+            low, high = self._build_pos_bounds_single(dof_low, dof_high, kin_char_model)
+        else:
+            raise ValueError("Unsupported control mode: {}".format(control_mode))
+        return low, high
+
     def _build_envs(self, env_config, num_envs):
-        self._build_kin_char_model(env_config["char_file"])
-        self._parse_init_pose(env_config.get("init_pose", None), self._device)
+        self._char_file_a = self._get_char_file(env_config, "a")
+        self._char_file_b = self._get_char_file(env_config, "b")
+        assert self._char_file_a is not None, "Missing char_file or char_file_a"
+        assert self._char_file_b is not None, "Missing char_file or char_file_b"
+
+        self._kin_char_model_a = self._build_kin_char_model_for_file(self._char_file_a)
+        self._kin_char_model_b = self._build_kin_char_model_for_file(self._char_file_b)
+
+        self._init_root_pos_a, self._init_root_rot_a, self._init_dof_pos_a = self._parse_init_pose(
+            env_config.get("init_pose_a", env_config.get("init_pose", None)), self._kin_char_model_a, self._device
+        )
+        self._init_root_pos_b, self._init_root_rot_b, self._init_dof_pos_b = self._parse_init_pose(
+            env_config.get("init_pose_b", env_config.get("init_pose", None)), self._kin_char_model_b, self._device
+        )
 
         self._char_a_ids = []
         self._char_b_ids = []
@@ -92,10 +184,10 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         Logger.print("\n")
 
         self._motion_lib_a = motion_lib.MotionLib(
-            motion_file=env_config["motion_file_a"], kin_char_model=self._kin_char_model, device=self._device
+            motion_file=env_config["motion_file_a"], kin_char_model=self._kin_char_model_a, device=self._device
         )
         self._motion_lib_b = motion_lib.MotionLib(
-            motion_file=env_config["motion_file_b"], kin_char_model=self._kin_char_model, device=self._device
+            motion_file=env_config["motion_file_b"], kin_char_model=self._kin_char_model_b, device=self._device
         )
 
         # Must be called before engine.initialize_sim()
@@ -114,24 +206,24 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         a_id = self._engine.create_obj(
             env_id=env_id,
             obj_type=engine.ObjType.articulated,
-            asset_file=env_config["char_file"],
+            asset_file=self._char_file_a,
             name="character_a",
             is_visual=a_is_visual,
             enable_self_collisions=self._enable_self_collisions,
-            start_pos=self._init_root_pos.cpu().numpy(),
-            start_rot=self._init_root_rot.cpu().numpy(),
+            start_pos=self._init_root_pos_a.cpu().numpy(),
+            start_rot=self._init_root_rot_a.cpu().numpy(),
             disable_motors=a_is_visual,
             color=col_a,
         )
         b_id = self._engine.create_obj(
             env_id=env_id,
             obj_type=engine.ObjType.articulated,
-            asset_file=env_config["char_file"],
+            asset_file=self._char_file_b,
             name="character_b",
             is_visual=b_is_visual,
             enable_self_collisions=self._enable_self_collisions,
-            start_pos=self._init_root_pos.cpu().numpy(),
-            start_rot=self._init_root_rot.cpu().numpy(),
+            start_pos=self._init_root_pos_b.cpu().numpy(),
+            start_rot=self._init_root_rot_b.cpu().numpy(),
             disable_motors=b_is_visual,
             color=col_b,
         )
@@ -143,90 +235,73 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             assert self._char_a_ids[0] == a_id
             assert self._char_b_ids[0] == b_id
 
-    def _build_kin_char_model(self, char_file):
-        _, file_ext = os.path.splitext(char_file)
-        if file_ext == ".xml":
-            import anim.mjcf_char_model as mjcf_char_model
-
-            model = mjcf_char_model.MJCFCharModel(self._device)
-        elif file_ext == ".urdf":
-            import anim.urdf_char_model as urdf_char_model
-
-            model = urdf_char_model.URDFCharModel(self._device)
-        elif file_ext == ".usd":
-            import anim.usd_char_model as usd_char_model
-
-            model = usd_char_model.USDCharModel(self._device)
-        else:
-            raise ValueError("Unsupported character file format: {}".format(file_ext))
-        model.load(char_file)
-        self._kin_char_model = model
-
-    def _parse_init_pose(self, init_pose, device):
-        dof_size = self._kin_char_model.get_dof_size()
-        if init_pose is None:
-            init_pose = torch.zeros(6 + dof_size, dtype=torch.float32, device=device)
-        else:
-            init_pose = torch.tensor(init_pose, dtype=torch.float32, device=device)
-            if init_pose.shape[-1] == 3:
-                init_pose = torch.cat([init_pose, torch.zeros(3 + dof_size, device=device)], dim=-1)
-
-        init_root_pos, init_root_rot, init_dof_pos = motion_lib.extract_pose_data(init_pose)
-        self._init_root_pos = init_root_pos
-        self._init_root_rot = torch_util.exp_map_to_quat(init_root_rot)
-        self._init_dof_pos = init_dof_pos
-
     def _build_sim_tensors(self, env_config):
         super()._build_sim_tensors(env_config)
         n = self.get_num_envs()
         char_a = self._char_a_ids[0]
-        root_pos = self._engine.get_root_pos(char_a)
-        root_rot = self._engine.get_root_rot(char_a)
-        root_vel = self._engine.get_root_vel(char_a)
-        root_ang_vel = self._engine.get_root_ang_vel(char_a)
-        body_pos = self._engine.get_body_pos(char_a)
-        body_rot = self._engine.get_body_rot(char_a)
-        dof_pos = self._engine.get_dof_pos(char_a)
-        dof_vel = self._engine.get_dof_vel(char_a)
+        char_b = self._char_b_ids[0]
+        root_pos_a = self._engine.get_root_pos(char_a)
+        root_rot_a = self._engine.get_root_rot(char_a)
+        root_vel_a = self._engine.get_root_vel(char_a)
+        root_ang_vel_a = self._engine.get_root_ang_vel(char_a)
+        body_pos_a = self._engine.get_body_pos(char_a)
+        body_rot_a = self._engine.get_body_rot(char_a)
+        dof_pos_a = self._engine.get_dof_pos(char_a)
+        dof_vel_a = self._engine.get_dof_vel(char_a)
+        root_pos_b = self._engine.get_root_pos(char_b)
+        root_rot_b = self._engine.get_root_rot(char_b)
+        root_vel_b = self._engine.get_root_vel(char_b)
+        root_ang_vel_b = self._engine.get_root_ang_vel(char_b)
+        body_pos_b = self._engine.get_body_pos(char_b)
+        body_rot_b = self._engine.get_body_rot(char_b)
+        dof_pos_b = self._engine.get_dof_pos(char_b)
+        dof_vel_b = self._engine.get_dof_vel(char_b)
 
         self._motion_ids = torch.zeros(n, device=self._device, dtype=torch.long)
         self._motion_time_offsets = torch.zeros(n, device=self._device, dtype=torch.float32)
 
-        self._ref_root_pos_a = torch.zeros_like(root_pos)
-        self._ref_root_rot_a = torch.zeros_like(root_rot)
-        self._ref_root_vel_a = torch.zeros_like(root_vel)
-        self._ref_root_ang_vel_a = torch.zeros_like(root_ang_vel)
-        self._ref_body_pos_a = torch.zeros_like(body_pos)
-        self._ref_body_rot_a = torch.zeros_like(body_rot)
-        self._ref_joint_rot_a = torch.zeros_like(body_rot[..., 1:, :])
-        self._ref_dof_pos_a = torch.zeros_like(dof_pos)
-        self._ref_dof_vel_a = torch.zeros_like(dof_vel)
+        self._ref_root_pos_a = torch.zeros_like(root_pos_a)
+        self._ref_root_rot_a = torch.zeros_like(root_rot_a)
+        self._ref_root_vel_a = torch.zeros_like(root_vel_a)
+        self._ref_root_ang_vel_a = torch.zeros_like(root_ang_vel_a)
+        self._ref_body_pos_a = torch.zeros_like(body_pos_a)
+        self._ref_body_rot_a = torch.zeros_like(body_rot_a)
+        self._ref_joint_rot_a = torch.zeros_like(body_rot_a[..., 1:, :])
+        self._ref_dof_pos_a = torch.zeros_like(dof_pos_a)
+        self._ref_dof_vel_a = torch.zeros_like(dof_vel_a)
 
-        self._ref_root_pos_b = torch.zeros_like(root_pos)
-        self._ref_root_rot_b = torch.zeros_like(root_rot)
-        self._ref_root_vel_b = torch.zeros_like(root_vel)
-        self._ref_root_ang_vel_b = torch.zeros_like(root_ang_vel)
-        self._ref_body_pos_b = torch.zeros_like(body_pos)
-        self._ref_body_rot_b = torch.zeros_like(body_rot)
-        self._ref_joint_rot_b = torch.zeros_like(body_rot[..., 1:, :])
-        self._ref_dof_pos_b = torch.zeros_like(dof_pos)
-        self._ref_dof_vel_b = torch.zeros_like(dof_vel)
+        self._ref_root_pos_b = torch.zeros_like(root_pos_b)
+        self._ref_root_rot_b = torch.zeros_like(root_rot_b)
+        self._ref_root_vel_b = torch.zeros_like(root_vel_b)
+        self._ref_root_ang_vel_b = torch.zeros_like(root_ang_vel_b)
+        self._ref_body_pos_b = torch.zeros_like(body_pos_b)
+        self._ref_body_rot_b = torch.zeros_like(body_rot_b)
+        self._ref_joint_rot_b = torch.zeros_like(body_rot_b[..., 1:, :])
+        self._ref_dof_pos_b = torch.zeros_like(dof_pos_b)
+        self._ref_dof_vel_b = torch.zeros_like(dof_vel_b)
 
-        key_bodies = env_config.get("key_bodies", [])
-        self._key_body_ids_a = self._build_body_ids_tensor(self._char_a_ids[0], key_bodies)
-        self._key_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], key_bodies)
-        self._contact_body_ids_a = self._build_body_ids_tensor(self._char_a_ids[0], env_config.get("contact_bodies", []))
-        self._contact_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], env_config.get("contact_bodies", []))
+        key_bodies_a = self._get_side_body_names(env_config, "key_bodies", "a")
+        key_bodies_b = self._get_side_body_names(env_config, "key_bodies", "b")
+        self._key_body_ids_a = self._build_body_ids_tensor(self._char_a_ids[0], key_bodies_a)
+        self._key_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], key_bodies_b)
+        if self._key_body_ids_a.numel() > 0 and self._key_body_ids_b.numel() > 0:
+            assert self._key_body_ids_a.numel() == self._key_body_ids_b.numel(), \
+                "key_bodies_a and key_bodies_b must have the same number of bodies"
 
-        pose_termination_bodies = env_config.get("pose_termination_bodies", [])
-        if len(pose_termination_bodies) > 0:
-            self._pose_termination_body_ids_a = self._build_body_ids_tensor(self._char_a_ids[0], pose_termination_bodies)
-            self._pose_termination_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], pose_termination_bodies)
-        else:
-            self._pose_termination_body_ids_a = torch.zeros(0, device=self._device, dtype=torch.long)
-            self._pose_termination_body_ids_b = torch.zeros(0, device=self._device, dtype=torch.long)
+        contact_bodies_a = self._get_side_body_names(env_config, "contact_bodies", "a")
+        contact_bodies_b = self._get_side_body_names(env_config, "contact_bodies", "b")
+        self._contact_body_ids_a = self._build_body_ids_tensor(self._char_a_ids[0], contact_bodies_a)
+        self._contact_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], contact_bodies_b)
 
-        self._parse_joint_err_weights(env_config.get("joint_err_w", None))
+        pose_termination_bodies_a = self._get_side_body_names(env_config, "pose_termination_bodies", "a")
+        pose_termination_bodies_b = self._get_side_body_names(env_config, "pose_termination_bodies", "b")
+        self._pose_termination_body_ids_a = self._build_body_ids_tensor(self._char_a_ids[0], pose_termination_bodies_a)
+        self._pose_termination_body_ids_b = self._build_body_ids_tensor(self._char_b_ids[0], pose_termination_bodies_b)
+
+        joint_err_w_a = env_config.get("joint_err_w_a", env_config.get("joint_err_w", None))
+        joint_err_w_b = env_config.get("joint_err_w_b", env_config.get("joint_err_w", None))
+        self._joint_err_w_a, self._dof_err_w_a = self._parse_joint_err_weights_for_model(self._kin_char_model_a, joint_err_w_a)
+        self._joint_err_w_b, self._dof_err_w_b = self._parse_joint_err_weights_for_model(self._kin_char_model_b, joint_err_w_b)
 
         if self._inter_actor_collisions and self._inter_actor_contact_bodies_a:
             self._contact_body_ids_inter_a = self._build_body_ids_tensor(
@@ -239,52 +314,30 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             self._contact_body_ids_inter_a = torch.zeros(0, dtype=torch.long, device=self._device)
             self._contact_body_ids_inter_b = torch.zeros(0, dtype=torch.long, device=self._device)
 
-    def _parse_joint_err_weights(self, joint_err_w):
-        num_joints = self._kin_char_model.get_num_joints()
-        if joint_err_w is None:
-            self._joint_err_w = torch.ones(num_joints - 1, device=self._device, dtype=torch.float32)
-        else:
-            self._joint_err_w = torch.tensor(joint_err_w, device=self._device, dtype=torch.float32)
-        dof_size = self._kin_char_model.get_dof_size()
-        self._dof_err_w = torch.zeros(dof_size, device=self._device, dtype=torch.float32)
-        for j in range(1, num_joints):
-            dim = self._kin_char_model.get_joint_dof_dim(j)
-            if dim > 0:
-                idx = self._kin_char_model.get_joint_dof_idx(j)
-                self._dof_err_w[idx : idx + dim] = self._joint_err_w[j - 1]
-
     def _build_action_space(self):
         control_mode = self._engine.get_control_mode()
         char_a = self._char_a_ids[0]
-        if control_mode == engine.ControlMode.none:
-            action_size = int(self._engine.get_dof_pos(char_a).shape[-1])
-            low = -np.ones(action_size, dtype=np.float32)
-            high = np.ones(action_size, dtype=np.float32)
-        elif control_mode == engine.ControlMode.vel:
-            action_size = int(self._engine.get_dof_pos(char_a).shape[-1])
-            low = -2.0 * np.pi * np.ones(action_size, dtype=np.float32)
-            high = 2.0 * np.pi * np.ones(action_size, dtype=np.float32)
-        elif control_mode == engine.ControlMode.torque:
-            torque_lim = self._engine.get_obj_torque_limits(0, char_a)
-            low = -np.array(torque_lim, dtype=np.float32)
-            high = np.array(torque_lim, dtype=np.float32)
-        elif control_mode in (engine.ControlMode.pos, engine.ControlMode.pd_explicit):
-            dof_low, dof_high = self._engine.get_obj_dof_limits(0, char_a)
-            low, high = self._build_pos_bounds_single(dof_low, dof_high)
-        else:
-            raise ValueError("Unsupported control mode: {}".format(control_mode))
+        char_b = self._char_b_ids[0]
+        low_a, high_a = self._build_action_bounds_single(char_a, self._kin_char_model_a, control_mode)
+        low_b, high_b = self._build_action_bounds_single(char_b, self._kin_char_model_b, control_mode)
 
         if self._control_mode == "dual":
-            low = np.concatenate([low, low], axis=0)
-            high = np.concatenate([high, high], axis=0)
+            low = np.concatenate([low_a, low_b], axis=0)
+            high = np.concatenate([high_a, high_b], axis=0)
+        elif self._control_mode == "single_a":
+            low = low_a
+            high = high_a
+        else:
+            low = low_b
+            high = high_b
         return spaces.Box(low=low, high=high)
 
-    def _build_pos_bounds_single(self, dof_low, dof_high):
+    def _build_pos_bounds_single(self, dof_low, dof_high, kin_char_model):
         low = np.zeros(dof_high.shape, dtype=np.float32)
         high = np.zeros(dof_high.shape, dtype=np.float32)
-        num_joints = self._kin_char_model.get_num_joints()
+        num_joints = kin_char_model.get_num_joints()
         for j in range(1, num_joints):
-            joint = self._kin_char_model.get_joint(j)
+            joint = kin_char_model.get_joint(j)
             dim = joint.get_dof_dim()
             if dim <= 0:
                 continue
@@ -381,8 +434,8 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         self._s_body_pos_b = self._engine.get_body_pos(b_id)
 
         # Pre-compute joint rotations (used in both obs and reward)
-        self._s_joint_rot_a = self._kin_char_model.dof_to_rot(self._s_dof_pos_a)
-        self._s_joint_rot_b = self._kin_char_model.dof_to_rot(self._s_dof_pos_b)
+        self._s_joint_rot_a = self._kin_char_model_a.dof_to_rot(self._s_dof_pos_a)
+        self._s_joint_rot_b = self._kin_char_model_b.dof_to_rot(self._s_dof_pos_b)
 
         # Ground contact forces (used in reward and done)
         self._s_gcf_a = self._engine.get_ground_contact_forces(a_id)
@@ -412,8 +465,8 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         root_pos_a, root_rot_a, root_vel_a, root_ang_vel_a, joint_rot_a, dof_vel_a = a
         root_pos_b, root_rot_b, root_vel_b, root_ang_vel_b, joint_rot_b, dof_vel_b = b
 
-        body_pos_a, body_rot_a = self._kin_char_model.forward_kinematics(root_pos_a, root_rot_a, joint_rot_a)
-        body_pos_b, body_rot_b = self._kin_char_model.forward_kinematics(root_pos_b, root_rot_b, joint_rot_b)
+        body_pos_a, body_rot_a = self._kin_char_model_a.forward_kinematics(root_pos_a, root_rot_a, joint_rot_a)
+        body_pos_b, body_rot_b = self._kin_char_model_b.forward_kinematics(root_pos_b, root_rot_b, joint_rot_b)
 
         self._ref_root_pos_a[target] = root_pos_a
         self._ref_root_rot_a[target] = root_rot_a
@@ -516,8 +569,8 @@ class DualDeepMimicEnv(sim_env.SimEnv):
                 dof_pos_b = dof_pos_b[env_ids]
                 dof_vel_b = dof_vel_b[env_ids]
                 body_pos_b = body_pos_b[env_ids]
-            joint_rot_a = self._kin_char_model.dof_to_rot(dof_pos_a)
-            joint_rot_b = self._kin_char_model.dof_to_rot(dof_pos_b)
+            joint_rot_a = self._kin_char_model_a.dof_to_rot(dof_pos_a)
+            joint_rot_b = self._kin_char_model_b.dof_to_rot(dof_pos_b)
             if env_ids is not None:
                 motion_ids = self._motion_ids[env_ids]
                 motion_times = self._get_motion_times(env_ids)
@@ -571,7 +624,7 @@ class DualDeepMimicEnv(sim_env.SimEnv):
                 tar_joint_rot_a,
                 [tar_joint_rot_a.shape[0] * tar_joint_rot_a.shape[1], tar_joint_rot_a.shape[-2], tar_joint_rot_a.shape[-1]],
             )
-            tar_body_pos_a_flat, _ = self._kin_char_model.forward_kinematics(
+            tar_body_pos_a_flat, _ = self._kin_char_model_a.forward_kinematics(
                 tar_root_pos_a_flat, tar_root_rot_a_flat, tar_joint_rot_a_flat
             )
             tar_body_pos_a = torch.reshape(
@@ -589,7 +642,7 @@ class DualDeepMimicEnv(sim_env.SimEnv):
                 tar_joint_rot_b,
                 [tar_joint_rot_b.shape[0] * tar_joint_rot_b.shape[1], tar_joint_rot_b.shape[-2], tar_joint_rot_b.shape[-1]],
             )
-            tar_body_pos_b_flat, _ = self._kin_char_model.forward_kinematics(
+            tar_body_pos_b_flat, _ = self._kin_char_model_b.forward_kinematics(
                 tar_root_pos_b_flat, tar_root_rot_b_flat, tar_joint_rot_b_flat
             )
             tar_body_pos_b = torch.reshape(
@@ -719,8 +772,8 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             self._ref_joint_rot_a,
             self._ref_dof_vel_a,
             tar_key_pos_a,
-            self._joint_err_w,
-            self._dof_err_w,
+            self._joint_err_w_a,
+            self._dof_err_w_a,
             self._track_root_h,
             self._track_root,
             self._reward_pose_w,
@@ -759,8 +812,8 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             self._ref_joint_rot_b,
             self._ref_dof_vel_b,
             tar_key_pos_b,
-            self._joint_err_w,
-            self._dof_err_w,
+            self._joint_err_w_b,
+            self._dof_err_w_b,
             self._track_root_h,
             self._track_root,
             self._reward_pose_w,
@@ -891,8 +944,9 @@ class DualDeepMimicEnv(sim_env.SimEnv):
     def _validate_envs(self):
         sim_a = self._engine.get_obj_body_names(self._char_a_ids[0])
         sim_b = self._engine.get_obj_body_names(self._char_b_ids[0])
-        kin = self._kin_char_model.get_body_names()
-        for s, k in zip(sim_a, kin):
+        kin_a = self._kin_char_model_a.get_body_names()
+        kin_b = self._kin_char_model_b.get_body_names()
+        for s, k in zip(sim_a, kin_a):
             assert s == k
-        for s, k in zip(sim_b, kin):
+        for s, k in zip(sim_b, kin_b):
             assert s == k
