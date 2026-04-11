@@ -1,0 +1,22 @@
+# Dual motion viewer: G1 + SMPL fat (same assets and clips as dual_deepmimic_g1_fat).
+# Run from mimickit/: python run.py --arg_file ../args/view_motion_dual_g1_fat_args.txt
+
+env_name: "view_motion_dual"
+
+char_file_a: "data/assets/g1/g1.xml"
+char_file_b: "data/assets/smpl/human_variants/fat.xml"
+
+camera_mode: "track"
+
+episode_length: 20.0
+global_obs: False
+root_height_obs: True
+
+# Key debug draw uses character A (G1) only — use G1 body names.
+key_bodies: ["head_link", "left_wrist_yaw_link", "right_wrist_yaw_link"]
+
+motion_file_a: "dual_data/converted/egohuman_g1_fat_g1.pkl"
+motion_file_b: "dual_data/converted/egohuman_g1_fat_fat.pkl"
+
+init_pose_a: [0.0, 0.0, 0.85]
+init_pose_b: [0.0, 0.0, 0.93]

@@ -321,6 +321,11 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         low_a, high_a = self._build_action_bounds_single(char_a, self._kin_char_model_a, control_mode)
         low_b, high_b = self._build_action_bounds_single(char_b, self._kin_char_model_b, control_mode)
 
+        self._num_action_dof_a = int(low_a.shape[0])
+        self._num_action_dof_b = int(low_b.shape[0])
+        assert self._num_action_dof_a == self._kin_char_model_a.get_dof_size()
+        assert self._num_action_dof_b == self._kin_char_model_b.get_dof_size()
+
         if self._control_mode == "dual":
             low = np.concatenate([low_a, low_b], axis=0)
             high = np.concatenate([high_a, high_b], axis=0)
@@ -733,10 +738,14 @@ class DualDeepMimicEnv(sim_env.SimEnv):
 
     def _apply_action(self, actions):
         clip = torch.minimum(torch.maximum(actions, self._action_bound_low), self._action_bound_high)
-        dof_a = self._engine.get_dof_pos(self._char_a_ids[0]).shape[-1]
         if self._control_mode == "dual":
-            act_a = clip[..., :dof_a]
-            act_b = clip[..., dof_a:]
+            assert clip.shape[-1] == self._num_action_dof_a + self._num_action_dof_b, (
+                "action width {:d} != dof_a + dof_b ({:d} + {:d})".format(
+                    clip.shape[-1], self._num_action_dof_a, self._num_action_dof_b
+                )
+            )
+            act_a = clip[..., : self._num_action_dof_a]
+            act_b = clip[..., self._num_action_dof_a :]
         elif self._control_mode == "single_a":
             act_a = clip
             self._engine.set_cmd(self._char_a_ids[0], act_a)

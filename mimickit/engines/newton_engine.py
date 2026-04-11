@@ -322,6 +322,9 @@ class NewtonEngine(engine.Engine):
         self._sim_timestep = 1.0 / sim_freq
         self._sim_step_count = 0
 
+        # MuJoCo/Newton CCD defaults (~35) can warn under dense meshes or tight contacts; override via engine YAML.
+        self._solver_ccd_iterations = int(config.get("ccd_iterations", 100))
+
         self._scene_builder = self._create_model_builder()
         self._builder_cache = dict()
 
@@ -904,7 +907,8 @@ class NewtonEngine(engine.Engine):
             nconmax=150,
             impratio=10,
             iterations=100,
-            ls_iterations=50
+            ls_iterations=50,
+            ccd_iterations=self._solver_ccd_iterations,
         )
         return
     

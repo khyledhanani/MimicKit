@@ -36,10 +36,10 @@ class ViewMotionDualEnv(sim_env.SimEnv):
 
         self._print_char_prop(0, self._char_a_ids[0], "A")
         self._print_char_prop(0, self._char_b_ids[0], "B")
-        self._validate_envs(self._char_a_ids[0], "A")
-        self._validate_envs(self._char_b_ids[0], "B")
+        self._validate_envs(self._char_a_ids[0], "A", self._kin_char_model_a)
+        self._validate_envs(self._char_b_ids[0], "B", self._kin_char_model_b)
 
-    def _build_kin_char_model(self, char_file):
+    def _build_kin_char_model_for_file(self, char_file):
         _, file_ext = os.path.splitext(char_file)
         if file_ext == ".xml":
             import anim.mjcf_char_model as mjcf_char_model
@@ -57,26 +57,38 @@ class ViewMotionDualEnv(sim_env.SimEnv):
             assert False, "Unsupported character file format: {:s}".format(file_ext)
 
         char_model.load(char_file)
-        self._kin_char_model = char_model
+        return char_model
 
-    def _parse_init_pose(self, init_pose, device):
-        dof_size = self._kin_char_model.get_dof_size()
+    def _parse_init_pose_side(self, init_pose, kin_char_model):
+        dof_size = kin_char_model.get_dof_size()
         if init_pose is None:
-            init_pose = torch.zeros(6 + dof_size, dtype=torch.float32, device=device)
+            init_pose = torch.zeros(6 + dof_size, dtype=torch.float32, device=self._device)
         else:
-            init_pose = torch.tensor(init_pose, dtype=torch.float32, device=device)
+            init_pose = torch.tensor(init_pose, dtype=torch.float32, device=self._device)
             if init_pose.shape[-1] == 3:
-                init_pose = torch.cat([init_pose, torch.zeros(3 + dof_size, device=device)], dim=-1)
+                init_pose = torch.cat([init_pose, torch.zeros(3 + dof_size, device=self._device)], dim=-1)
 
         init_root_pos, init_root_rot, init_dof_pos = motion_lib.extract_pose_data(init_pose)
-        self._init_root_pos = init_root_pos
-        self._init_root_rot = torch_util.exp_map_to_quat(init_root_rot)
-        self._init_dof_pos = init_dof_pos
+        init_root_rot = torch_util.exp_map_to_quat(init_root_rot)
+        return init_root_pos, init_root_rot, init_dof_pos
 
     def _build_envs(self, env_config, num_envs):
-        char_file = env_config["char_file"]
-        self._build_kin_char_model(char_file)
-        self._parse_init_pose(env_config.get("init_pose", None), self._device)
+        shared_char = env_config.get("char_file", None)
+        self._char_file_a = env_config.get("char_file_a", shared_char)
+        self._char_file_b = env_config.get("char_file_b", shared_char)
+        assert self._char_file_a is not None, "Set char_file or char_file_a"
+        assert self._char_file_b is not None, "Set char_file or char_file_b"
+
+        self._kin_char_model_a = self._build_kin_char_model_for_file(self._char_file_a)
+        self._kin_char_model_b = self._build_kin_char_model_for_file(self._char_file_b)
+
+        shared_init = env_config.get("init_pose", None)
+        self._init_root_pos_a, self._init_root_rot_a, self._init_dof_pos_a = self._parse_init_pose_side(
+            env_config.get("init_pose_a", shared_init), self._kin_char_model_a
+        )
+        self._init_root_pos_b, self._init_root_rot_b, self._init_dof_pos_b = self._parse_init_pose_side(
+            env_config.get("init_pose_b", shared_init), self._kin_char_model_b
+        )
 
         self._char_a_ids = []
         self._char_b_ids = []
@@ -89,39 +101,41 @@ class ViewMotionDualEnv(sim_env.SimEnv):
         Logger.print("\n")
 
         self._motion_lib_a = motion_lib.MotionLib(
-            motion_file=env_config["motion_file_a"], kin_char_model=self._kin_char_model, device=self._device
+            motion_file=env_config["motion_file_a"], kin_char_model=self._kin_char_model_a, device=self._device
         )
         self._motion_lib_b = motion_lib.MotionLib(
-            motion_file=env_config["motion_file_b"], kin_char_model=self._kin_char_model, device=self._device
+            motion_file=env_config["motion_file_b"], kin_char_model=self._kin_char_model_b, device=self._device
         )
 
     def _build_env(self, env_id, env_config):
         col_a = np.array([0.25, 0.55, 0.95])
         col_b = np.array([0.35, 0.80, 0.35])
-        start_pos = self._init_root_pos.cpu().numpy()
-        start_rot = self._init_root_rot.cpu().numpy()
+        start_pos_a = self._init_root_pos_a.cpu().numpy()
+        start_rot_a = self._init_root_rot_a.cpu().numpy()
+        start_pos_b = self._init_root_pos_b.cpu().numpy()
+        start_rot_b = self._init_root_rot_b.cpu().numpy()
 
         a_id = self._engine.create_obj(
             env_id=env_id,
             obj_type=engine.ObjType.articulated,
-            asset_file=env_config["char_file"],
+            asset_file=self._char_file_a,
             name="character_a",
             is_visual=True,
             enable_self_collisions=False,
-            start_pos=start_pos,
-            start_rot=start_rot,
+            start_pos=start_pos_a,
+            start_rot=start_rot_a,
             disable_motors=True,
             color=col_a,
         )
         b_id = self._engine.create_obj(
             env_id=env_id,
             obj_type=engine.ObjType.articulated,
-            asset_file=env_config["char_file"],
+            asset_file=self._char_file_b,
             name="character_b",
             is_visual=True,
             enable_self_collisions=False,
-            start_pos=start_pos,
-            start_rot=start_rot,
+            start_pos=start_pos_b,
+            start_rot=start_rot_b,
             disable_motors=True,
             color=col_b,
         )
@@ -159,9 +173,9 @@ class ViewMotionDualEnv(sim_env.SimEnv):
     def _build_pos_bounds(self, dof_low, dof_high):
         low = np.zeros(dof_high.shape, dtype=np.float32)
         high = np.zeros(dof_high.shape, dtype=np.float32)
-        num_joints = self._kin_char_model.get_num_joints()
+        num_joints = self._kin_char_model_a.get_num_joints()
         for j in range(1, num_joints):
-            curr_joint = self._kin_char_model.get_joint(j)
+            curr_joint = self._kin_char_model_a.get_joint(j)
             j_dof_dim = curr_joint.get_dof_dim()
             if j_dof_dim <= 0:
                 continue
@@ -210,9 +224,9 @@ class ViewMotionDualEnv(sim_env.SimEnv):
             "Char {} {:d} properties\n\tDoFs: {:d}\n\tMass: {:.3f} kg\n".format(label, obj_id, num_dofs, total_mass)
         )
 
-    def _validate_envs(self, char_id, label):
+    def _validate_envs(self, char_id, label, kin_model):
         sim_body_names = self._engine.get_obj_body_names(char_id)
-        kin_body_names = self._kin_char_model.get_body_names()
+        kin_body_names = kin_model.get_body_names()
         for sim_name, kin_name in zip(sim_body_names, kin_body_names):
             assert sim_name == kin_name, "Char {} body mismatch: {} vs {}".format(label, sim_name, kin_name)
 
@@ -272,10 +286,10 @@ class ViewMotionDualEnv(sim_env.SimEnv):
         self._engine.set_dof_pos(None, char_b, joint_dof_b)
         self._engine.set_dof_vel(None, char_b, 0.0)
 
-        body_pos_a, body_rot_a = self._kin_char_model.forward_kinematics(
+        body_pos_a, body_rot_a = self._kin_char_model_a.forward_kinematics(
             root_pos=root_pos_a, root_rot=root_rot_a, joint_rot=joint_rot_a
         )
-        body_pos_b, body_rot_b = self._kin_char_model.forward_kinematics(
+        body_pos_b, body_rot_b = self._kin_char_model_b.forward_kinematics(
             root_pos=root_pos_b, root_rot=root_rot_b, joint_rot=joint_rot_b
         )
 
@@ -326,7 +340,7 @@ class ViewMotionDualEnv(sim_env.SimEnv):
             dof_vel = dof_vel[env_ids]
             body_pos = body_pos[env_ids]
 
-        joint_rot = self._kin_char_model.dof_to_rot(dof_pos)
+        joint_rot = self._kin_char_model_a.dof_to_rot(dof_pos)
         if self._has_key_bodies():
             key_pos = body_pos[..., self._key_body_ids, :]
         else:
@@ -351,29 +365,38 @@ class ViewMotionDualEnv(sim_env.SimEnv):
 
         char_a = self._char_a_ids[0]
         char_b = self._char_b_ids[0]
-        for cid in (char_a, char_b):
-            self._engine.set_root_pos(env_ids, cid, self._init_root_pos)
-            self._engine.set_root_rot(env_ids, cid, self._init_root_rot)
-            self._engine.set_root_vel(env_ids, cid, 0.0)
-            self._engine.set_root_ang_vel(env_ids, cid, 0.0)
-            self._engine.set_dof_pos(env_ids, cid, self._init_dof_pos)
-            self._engine.set_dof_vel(env_ids, cid, 0.0)
-            self._engine.set_body_vel(env_ids, cid, 0.0)
-            self._engine.set_body_ang_vel(env_ids, cid, 0.0)
+
+        self._engine.set_root_pos(env_ids, char_a, self._init_root_pos_a)
+        self._engine.set_root_rot(env_ids, char_a, self._init_root_rot_a)
+        self._engine.set_root_vel(env_ids, char_a, 0.0)
+        self._engine.set_root_ang_vel(env_ids, char_a, 0.0)
+        self._engine.set_dof_pos(env_ids, char_a, self._init_dof_pos_a)
+        self._engine.set_dof_vel(env_ids, char_a, 0.0)
+        self._engine.set_body_vel(env_ids, char_a, 0.0)
+        self._engine.set_body_ang_vel(env_ids, char_a, 0.0)
+
+        self._engine.set_root_pos(env_ids, char_b, self._init_root_pos_b)
+        self._engine.set_root_rot(env_ids, char_b, self._init_root_rot_b)
+        self._engine.set_root_vel(env_ids, char_b, 0.0)
+        self._engine.set_root_ang_vel(env_ids, char_b, 0.0)
+        self._engine.set_dof_pos(env_ids, char_b, self._init_dof_pos_b)
+        self._engine.set_dof_vel(env_ids, char_b, 0.0)
+        self._engine.set_body_vel(env_ids, char_b, 0.0)
+        self._engine.set_body_ang_vel(env_ids, char_b, 0.0)
 
         root_pos = self._engine.get_root_pos(char_a)[env_ids]
         root_rot = self._engine.get_root_rot(char_a)[env_ids]
         dof_pos = self._engine.get_dof_pos(char_a)[env_ids]
-        joint_rot = self._kin_char_model.dof_to_rot(dof_pos)
-        body_pos, body_rot = self._kin_char_model.forward_kinematics(root_pos, root_rot, joint_rot)
+        joint_rot = self._kin_char_model_a.dof_to_rot(dof_pos)
+        body_pos, body_rot = self._kin_char_model_a.forward_kinematics(root_pos, root_rot, joint_rot)
         self._engine.set_body_pos(env_ids, char_a, body_pos)
         self._engine.set_body_rot(env_ids, char_a, body_rot)
 
         root_pos_b = self._engine.get_root_pos(char_b)[env_ids]
         root_rot_b = self._engine.get_root_rot(char_b)[env_ids]
         dof_pos_b = self._engine.get_dof_pos(char_b)[env_ids]
-        joint_rot_b = self._kin_char_model.dof_to_rot(dof_pos_b)
-        body_pos_b, body_rot_b = self._kin_char_model.forward_kinematics(root_pos_b, root_rot_b, joint_rot_b)
+        joint_rot_b = self._kin_char_model_b.dof_to_rot(dof_pos_b)
+        body_pos_b, body_rot_b = self._kin_char_model_b.forward_kinematics(root_pos_b, root_rot_b, joint_rot_b)
         self._engine.set_body_pos(env_ids, char_b, body_pos_b)
         self._engine.set_body_rot(env_ids, char_b, body_rot_b)
 
