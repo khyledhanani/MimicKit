@@ -666,8 +666,12 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             )
 
             if self._ground_align_on_reset:
-                dz_a = self._ground_align_dz_a.unsqueeze(-1)
-                dz_b = self._ground_align_dz_b.unsqueeze(-1)
+                if env_ids is not None:
+                    dz_a = self._ground_align_dz_a[env_ids].unsqueeze(-1)
+                    dz_b = self._ground_align_dz_b[env_ids].unsqueeze(-1)
+                else:
+                    dz_a = self._ground_align_dz_a.unsqueeze(-1)
+                    dz_b = self._ground_align_dz_b.unsqueeze(-1)
                 tar_root_pos_a = tar_root_pos_a.clone()
                 tar_root_pos_b = tar_root_pos_b.clone()
                 tar_root_pos_a[..., 2] += dz_a
