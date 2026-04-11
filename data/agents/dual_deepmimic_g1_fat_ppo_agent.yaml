@@ -1,0 +1,39 @@
+agent_name: "PPO"
+
+model:
+  actor_net: "fc_2layers_1024units"
+  actor_init_output_scale: 0.01
+  actor_std_type: "FIXED"
+  action_std: 0.055
+
+  critic_net: "fc_2layers_1024units"
+
+actor_optimizer:
+    type: "Adam"
+    learning_rate: 3.0e-4
+    weight_decay: 1.0e-5
+    grad_clip: 0.5
+
+critic_optimizer:
+    type: "Adam"
+    learning_rate: 3.0e-4
+    weight_decay: 1.0e-5
+    grad_clip: 0.5
+
+discount: 0.99
+steps_per_iter: 64
+iters_per_output: 100
+test_episodes: 32
+normalizer_samples: 100000000
+
+actor_epochs: 5
+actor_batch_size: 8
+critic_epochs: 2
+critic_batch_size: 4
+
+td_lambda: 0.95
+ppo_clip_ratio: 0.2
+norm_adv_clip: 4.0
+action_bound_weight: 10.0
+action_entropy_weight: 0.01
+action_reg_weight: 0.0
