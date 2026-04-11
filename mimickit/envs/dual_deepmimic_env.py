@@ -33,6 +33,7 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         self._control_mode = env_config.get("control_mode", "dual")
         self._enable_self_collisions = env_config.get("enable_self_collisions", False)
         self._visual_reference_partner = env_config.get("visual_reference_partner", True)
+        self._ground_align_on_reset = env_config.get("ground_align_on_reset", False)
         assert self._control_mode in ("dual", "single_a", "single_b"), "control_mode must be dual, single_a, or single_b"
 
         self._inter_actor_collisions = env_config.get("inter_actor_collisions", False)
@@ -314,6 +315,41 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             self._contact_body_ids_inter_a = torch.zeros(0, dtype=torch.long, device=self._device)
             self._contact_body_ids_inter_b = torch.zeros(0, dtype=torch.long, device=self._device)
 
+        self._ground_align_dz_a = torch.zeros(n, device=self._device, dtype=torch.float32)
+        self._ground_align_dz_b = torch.zeros(n, device=self._device, dtype=torch.float32)
+
+    @staticmethod
+    def _foot_ground_align_dz(body_pos, contact_body_ids):
+        """World-space Δz so the lowest contact body rests on z=0 (negative of min foot z)."""
+        if contact_body_ids.numel() == 0:
+            return torch.zeros(body_pos.shape[0], device=body_pos.device, dtype=body_pos.dtype)
+        z = body_pos[:, contact_body_ids, 2]
+        return -z.min(dim=-1).values
+
+    def _recompute_ground_align_dz_from_ref(self, env_ids):
+        self._ground_align_dz_a[env_ids] = self._foot_ground_align_dz(
+            self._ref_body_pos_a[env_ids], self._contact_body_ids_a
+        )
+        self._ground_align_dz_b[env_ids] = self._foot_ground_align_dz(
+            self._ref_body_pos_b[env_ids], self._contact_body_ids_b
+        )
+
+    def _apply_ground_align_to_ref(self, env_ids=None):
+        if not self._ground_align_on_reset:
+            return
+        if env_ids is None:
+            self._ref_root_pos_a[:, 2] += self._ground_align_dz_a
+            self._ref_root_pos_b[:, 2] += self._ground_align_dz_b
+            self._ref_body_pos_a[:, :, 2] += self._ground_align_dz_a.unsqueeze(-1)
+            self._ref_body_pos_b[:, :, 2] += self._ground_align_dz_b.unsqueeze(-1)
+        else:
+            da = self._ground_align_dz_a[env_ids]
+            db = self._ground_align_dz_b[env_ids]
+            self._ref_root_pos_a[env_ids, 2] += da
+            self._ref_root_pos_b[env_ids, 2] += db
+            self._ref_body_pos_a[env_ids, :, 2] += da.unsqueeze(-1)
+            self._ref_body_pos_b[env_ids, :, 2] += db.unsqueeze(-1)
+
     def _build_action_space(self):
         control_mode = self._engine.get_control_mode()
         char_a = self._char_a_ids[0]
@@ -414,7 +450,13 @@ class DualDeepMimicEnv(sim_env.SimEnv):
         motion_ids, motion_times = self._sample_motion_times(len(env_ids))
         self._motion_ids[env_ids] = motion_ids
         self._motion_time_offsets[env_ids] = motion_times
-        self._update_ref_motion(env_ids)
+        self._write_raw_ref_motion(env_ids)
+        if self._ground_align_on_reset:
+            self._recompute_ground_align_dz_from_ref(env_ids)
+        else:
+            self._ground_align_dz_a[env_ids] = 0
+            self._ground_align_dz_b[env_ids] = 0
+        self._apply_ground_align_to_ref(env_ids)
         self._sync_chars_to_ref(env_ids, sync_b=True)
 
     def _cache_engine_state(self):
@@ -455,6 +497,10 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             self._sync_char_a_to_ref(None)
 
     def _update_ref_motion(self, env_ids):
+        self._write_raw_ref_motion(env_ids)
+        self._apply_ground_align_to_ref(env_ids)
+
+    def _write_raw_ref_motion(self, env_ids):
         if env_ids is None:
             ids = self._motion_ids
             times = self._get_motion_times()
@@ -618,6 +664,14 @@ class DualDeepMimicEnv(sim_env.SimEnv):
             tar_root_pos_b, tar_root_rot_b, tar_joint_rot_b = self._fetch_tar_obs_data(
                 self._motion_lib_b, motion_ids, motion_times
             )
+
+            if self._ground_align_on_reset:
+                dz_a = self._ground_align_dz_a.unsqueeze(-1)
+                dz_b = self._ground_align_dz_b.unsqueeze(-1)
+                tar_root_pos_a = tar_root_pos_a.clone()
+                tar_root_pos_b = tar_root_pos_b.clone()
+                tar_root_pos_a[..., 2] += dz_a
+                tar_root_pos_b[..., 2] += dz_b
 
             tar_root_pos_a_flat = torch.reshape(
                 tar_root_pos_a, [tar_root_pos_a.shape[0] * tar_root_pos_a.shape[1], tar_root_pos_a.shape[-1]]
