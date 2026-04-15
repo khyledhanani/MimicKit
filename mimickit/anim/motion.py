@@ -1,6 +1,11 @@
 import enum
 import numpy as np
 import pickle
+import sys
+
+import numpy.core.numeric as _numpy_core_numeric
+
+sys.modules.setdefault("numpy._core.numeric", _numpy_core_numeric)
 
 class LoopMode(enum.Enum):
     CLAMP = 0

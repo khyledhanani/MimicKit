@@ -179,8 +179,10 @@ class KinCharModel():
         body_pos = [None] * num_joints
         body_rot = [None] * num_joints
 
-        body_pos[0] = root_pos
-        body_rot[0] = root_rot
+        root_local_trans = torch.broadcast_to(self._local_translation[0], root_pos.shape)
+        root_local_rot = torch.broadcast_to(self._local_rotation[0], root_rot.shape)
+        body_pos[0] = root_pos + torch_util.quat_rotate(root_rot, root_local_trans)
+        body_rot[0] = torch_util.quat_mul(root_rot, root_local_rot)
 
         for j in range(1, num_joints):
             j_rot = joint_rot[..., j - 1, :]

@@ -324,6 +324,15 @@ class NewtonEngine(engine.Engine):
 
         # MuJoCo/Newton CCD defaults (~35) can warn under dense meshes or tight contacts; override via engine YAML.
         self._solver_ccd_iterations = int(config.get("ccd_iterations", 100))
+        self._solver_njmax = int(config.get("solver_njmax", 450))
+        self._solver_nconmax = int(config.get("solver_nconmax", 150))
+        self._solver_iterations = int(config.get("solver_iterations", 100))
+        self._solver_ls_iterations = int(config.get("solver_ls_iterations", 50))
+        self._rigid_contact_max = int(config.get("rigid_contact_max", self._solver_nconmax * num_envs))
+        self._soft_contact_max = int(config.get("soft_contact_max", 0))
+        # CUDA graph capture can OOM on large dual-articulation scenes even when the
+        # steady-state simulation itself fits. Allow per-env opt-out.
+        self._use_cuda_graph = bool(config.get("use_cuda_graph", True))
 
         self._scene_builder = self._create_model_builder()
         self._builder_cache = dict()
@@ -404,7 +413,12 @@ class NewtonEngine(engine.Engine):
         self._build_sim_tensors()
         self._build_dof_force_tensors()
 
-        self._contacts = self._sim_model.contacts()
+        self._collision_pipeline = newton.CollisionPipeline(
+            self._sim_model,
+            rigid_contact_max=self._rigid_contact_max,
+            soft_contact_max=self._soft_contact_max,
+        )
+        self._contacts = self._sim_model.contacts(self._collision_pipeline)
 
         if (self._visualize()):
             self.init_viewer(self._viewer)
@@ -903,11 +917,11 @@ class NewtonEngine(engine.Engine):
         self._solver = newton.solvers.SolverMuJoCo(
             self._sim_model,
             solver="newton",
-            njmax=450,
-            nconmax=150,
+            njmax=self._solver_njmax,
+            nconmax=self._solver_nconmax,
             impratio=10,
-            iterations=100,
-            ls_iterations=50,
+            iterations=self._solver_iterations,
+            ls_iterations=self._solver_ls_iterations,
             ccd_iterations=self._solver_ccd_iterations,
         )
         return
@@ -915,7 +929,7 @@ class NewtonEngine(engine.Engine):
     def _build_graphs(self):
         self._graph = None
         
-        if wp.get_device().is_cuda:
+        if self._use_cuda_graph and wp.get_device().is_cuda:
             with wp.ScopedCapture() as capture:
                 self._simulate()
 

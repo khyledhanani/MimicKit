@@ -1,0 +1,4 @@
+--num_envs 1
+
+--engine_config data/engines/newton_engine.yaml
+--env_config data/envs/view_motion_dual_g1_upper_back_symmetric_env.yaml

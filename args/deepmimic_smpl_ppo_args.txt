@@ -1,6 +1,6 @@
 --num_envs 4096
 
---engine_config data/engines/isaac_gym_engine.yaml
+--engine_config data/engines/newton_engine.yaml
 --env_config data/envs/deepmimic_smpl_env.yaml
 --agent_config data/agents/deepmimic_smpl_ppo_agent.yaml
 

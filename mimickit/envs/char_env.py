@@ -19,6 +19,7 @@ class CharEnv(sim_env.SimEnv):
         self._global_obs = env_config["global_obs"]
         self._root_height_obs = env_config.get("root_height_obs", True)
         self._zero_center_action = env_config.get("zero_center_action", False)
+        self._enable_self_collisions = env_config.get("enable_self_collisions", True)
         
         super().__init__(env_config=env_config, engine_config=engine_config,
                          num_envs=num_envs, device=device, visualize=visualize, 
@@ -85,6 +86,7 @@ class CharEnv(sim_env.SimEnv):
                                           obj_type=engine.ObjType.articulated,
                                           asset_file=char_file, 
                                           name="character",
+                                          enable_self_collisions=self._enable_self_collisions,
                                           start_pos=self._init_root_pos.cpu().numpy(),
                                           start_rot=self._init_root_rot.cpu().numpy(),
                                           color=color)
@@ -179,6 +181,7 @@ class CharEnv(sim_env.SimEnv):
                     j_high = np.max(np.abs(j_high))
                     curr_scale = max([j_low, j_high])
                     curr_scale = 1.2 * curr_scale
+                    curr_scale = min(curr_scale, np.pi)
 
                     curr_low = -curr_scale
                     curr_high = curr_scale
