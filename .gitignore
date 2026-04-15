@@ -9,21 +9,8 @@ wandb/
 dual_data/
 egohuman-rl/
 
+SMPLSim/
 
-data/assets/*
-!data/assets/g1/
-!data/assets/g1/**
-
-!data/assets/smpl/
-data/assets/smpl/*
-!data/assets/smpl/smpl.xml
-!data/assets/smpl/smpl_humanoid.xml
-!data/assets/smpl/smpl.usd
-
-
-data/models
-data/motions/*
-!data/motions/dual/
-!data/motions/dual/**
+data/
 
 holosoma

@@ -1,9 +1,0 @@
-engine_name: "newton"
-    
-control_mode: "pos"
-control_freq: 30
-sim_freq: 240
-env_spacing: 5
-
-# Continuous collision detection iterations for SolverMuJoCo (MuJoCo default ~35 often warns).
-ccd_iterations: 100
