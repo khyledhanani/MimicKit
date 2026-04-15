@@ -26,7 +26,7 @@ for the base install:
 
 Install [Newton](https://newton-physics.github.io/newton/guide/installation.html). This framework has been tested with `v1.0.0`.
 
-To use Newton, specify the argument `--engine_config data/engines/newton_engine.yaml` when running the code.
+To use Newton, specify the argument `--engine_config data/engines/newton_engine.yaml` when running the code (can generally specify this in the args files).
 - `pip install -r requirements.txt`
 - download data from: https://drive.google.com/drive/folders/1g-PhQgRvmTFn-bhEDrxLhECDYDQ8s9MI?usp=sharing
 
@@ -46,6 +46,8 @@ For the dual examples already configured here, the most important runtime files 
 
 ## 2. Which Converter To Use
 
+Files from the retargeting process or optimizers need to be converted before they are easily used by the mimicking infra
+
 Use the converter that matches the source archive schema, not the dataset name.
 
 | Source export | Typical keys | Use this converter |
@@ -54,51 +56,23 @@ Use the converter that matches the source archive schema, not the dataset name.
 | EgoHuman `mpc_joints` paired files | `root_orient`, `global_orient`, `trans`, `pose_body` | `tools/smpl_to_mimickit/mpc_joints_to_mimickit.py` |
 | Holosoma or retargeted dual bundle | `qpos_A`, `qpos_B`, usually plus `fps`, `dual_scene_xml`, `dual_prefix_A`, `dual_prefix_B` | `tools/interx_qpos_to_mimickit.py` |
 
-Concrete examples already present in this repo:
+Examples already present in this repo:
 
 - Raw InterX SMPL-X clips:
-  - `dual_data/G001T003A016R008/P1.npz`
-  - `dual_data/G001T003A016R008/P2.npz`
+  - `data/motions/dual/original/G001T003A016R008/P1.npz`
+  - `data/motions/dual/original/G001T003A016R008/P2.npz`
 - EgoHuman `mpc_joints` paired clips:
-  - `dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P1.npz`
-  - `dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P2.npz`
+  - `data/motions/dual/original/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P1.npz`
+  - `data/motions/dual/original/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P2.npz`
 - EgoHuman or Holosoma-style dual retarget bundles:
-  - `dual_data/egohuman_dual_g1_upper_back_symmetric_no_y2z/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz`
-  - `dual_data/egohuman_dual_g1_fat_sharedscale_20260410_174839/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz`
+  - `data/motions/dual/original/egohuman_dual_g1_upper_back_symmetric_no_y2z/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz`
+  - `data/motions/dual/original/egohuman_dual_g1_fat_sharedscale_20260410_174839/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz`
 
 ---
 
 ## 3. Source Pipelines
 
-### A. Holosoma raw InterX to MimicKit
-
-Holosoma consumes dual-human joint tracks such as `holosoma/DATA/interx_dual_inputs/G058T003A016R008.npz`, where the archive contains `human_joints_A`, `human_joints_B`, and `fps`. For IAMR retargeting it can also use raw InterX SMPL-X pose files such as `dual_data/G001T003A016R008/P1.npz` and `P2.npz`.
-
-The main Holosoma dual-retarget entrypoints in this repo are:
-
-- `holosoma/src/holosoma_retargeting/holosoma_retargeting/examples/iamr_dual_retarget.py`
-- `holosoma/src/holosoma_retargeting/holosoma_retargeting/examples/dual_robot_retarget.py`
-- `holosoma/src/holosoma_retargeting/holosoma_retargeting/examples/mixed_robot_human_retarget.py`
-
-Example IAMR run:
-
-```bash
-python holosoma/src/holosoma_retargeting/holosoma_retargeting/examples/iamr_dual_retarget.py --data_dir holosoma/DATA/interx_dual_inputs --raw_interx_dir dual_data --output_dir dual_data/holosoma_interx_outputs --sequence_id G001T003A016R008
-```
-
-The retargeted Holosoma output is a dual `.npz` bundle with keys like:
-
-- `qpos_A`
-- `qpos_B`
-- `fps`
-- `dual_scene_xml`
-- `dual_prefix_A`
-- `dual_prefix_B`
-- `qpos_coordinate_frame`
-
-That output should then be converted with `tools/interx_qpos_to_mimickit.py`.
-
-### B. Raw InterX SMPL-X to MimicKit without retargeting
+### A. Raw InterX SMPL-X to MimicKit without retargeting
 
 If you only want to view or train on paired human SMPL motions directly, convert `P1.npz` and `P2.npz` separately:
 
@@ -129,7 +103,7 @@ python tools/smpl_to_mimickit/mpc_joints_to_mimickit.py --input_file dual_data/m
 
 These are the paired human clips used by `data/envs/view_motion_dual_smpl_env.yaml`.
 
-### D. EgoHuman or Holosoma retargeted dual bundles to MimicKit
+### D. Holosoma retargeted dual bundles to MimicKit
 
 When the source has already been retargeted and saved as one dual bundle with `qpos_A` and `qpos_B`, convert both sides in one step:
 
@@ -191,20 +165,18 @@ The dual environment YAML is where the converted motions become training data. T
 
 The main dual env presets already in this repo are:
 
+For the unitree g1 hug from the optimizer (both are g1)
 - `data/envs/dual_deepmimic_g1_upper_back_symmetric_env.yaml`
 - `data/envs/view_motion_dual_g1_upper_back_symmetric_env.yaml`
-- `data/envs/dual_deepmimic_g1_fat_env.yaml`
-- `data/envs/view_motion_dual_g1_fat_env.yaml`
-- `data/envs/dual_deepmimic_smpl_g001t003a016r008_env.yaml`
+
+For the smpl humanoids hug from the optimizer (both are smpl type bodies)
+- `data/envs/dual_deepmimic_smpl_upper_only_env.yaml.yaml`
 - `data/envs/view_motion_dual_smpl_env.yaml`
 
 The corresponding arg presets are:
 
 - `args/dual_deepmimic_g1_upper_back_symmetric_newton_ppo_args.txt`
 - `args/view_motion_dual_g1_upper_back_symmetric_args.txt`
-- `args/dual_deepmimic_g1_fat_newton_ppo_args.txt`
-- `args/view_motion_dual_g1_fat_args.txt`
-- `args/dual_deepmimic_smpl_upper_back_newton_ppo_args.txt`
 - `args/dual_deepmimic_smpl_upper_only_newton_ppo_args.txt`
 - `args/view_motion_dual_smpl_args.txt`
 
@@ -212,19 +184,18 @@ The corresponding arg presets are:
 
 ## 6. Train
 
+
+Depending on the run, you can add in --num_envs to specify the number of parralel environments you want to train. Generally, a 12GB VRAM device can fit 2048 - 4096 parralel envs depending on the setup.
+
+
 ### Dual G1 upper-back symmetric
 
 ```bash
-python mimickit/run.py --arg_file args/dual_deepmimic_g1_upper_back_symmetric_newton_ppo_args.txt --visualize true
-```
-
-### Dual G1 + fat human variant
-
-```bash
-python mimickit/run.py --arg_file args/dual_deepmimic_g1_fat_newton_ppo_args.txt --visualize true
+python mimickit/run.py --arg_file args/dual_deepmimic_g1_upper_back_symmetric_newton_ppo_args.txt --visualize false
 ```
 
 ### Dual SMPL human baseline
+
 
 ```bash
 python mimickit/run.py --arg_file args/dual_deepmimic_smpl_upper_back_newton_ppo_args.txt --visualize true
