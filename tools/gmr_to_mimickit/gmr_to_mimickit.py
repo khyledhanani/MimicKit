@@ -3,7 +3,7 @@ This module provides functionality to convert motion data from GMR format to Mim
 
 Usage:
     Command line:
-        python tools/data_format/gmr_to_mimickit.py
+        python tools/gmr_to_mimickit/gmr_to_mimickit.py
     Required arguments:
         --input_file PATH       Path to the input GMR pickle file
         --output_file PATH      Path to save the output MimicKit pickle file
@@ -28,6 +28,7 @@ Output:
 """
 
 import argparse
+import os
 import pickle
 import numpy as np
 import sys
@@ -67,12 +68,12 @@ def convert_gmr_to_mimickit(gmr_file_path, output_file_path, loop_mode, start_fr
 
     # Log the type and shape of each extracted term
     print("\n" + "="*60)
-    print("📥 LOADED GMR DATA")
+    print("LOADED GMR DATA")
     print("="*60)
-    print(f"⏱️  FPS:           type={type(fps).__name__}, value={fps}")
-    print(f"📍 Root Position: type={type(root_pos).__name__}, shape={root_pos.shape}")
-    print(f"🔄 Root Rotation: type={type(root_rot_quat).__name__}, shape={root_rot_quat.shape}")
-    print(f"🦴 DOF Position:  type={type(dof_pos).__name__}, shape={dof_pos.shape}")
+    print(f"FPS:           type={type(fps).__name__}, value={fps}")
+    print(f"Root Position: type={type(root_pos).__name__}, shape={root_pos.shape}")
+    print(f"Root Rotation: type={type(root_rot_quat).__name__}, shape={root_rot_quat.shape}")
+    print(f"DOF Position:  type={type(dof_pos).__name__}, shape={dof_pos.shape}")
     print("="*60 + "\n")
     
     # Verify shapes
@@ -101,20 +102,23 @@ def convert_gmr_to_mimickit(gmr_file_path, output_file_path, loop_mode, start_fr
     save_fps = fps if output_fps == -1 else output_fps
 
     out_data = Motion(loop_mode=loop_mode_out, fps=save_fps, frames=frames)
+    output_dir = os.path.dirname(output_file_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     # Save to MimicKit format
     out_data.save(output_file_path)
     
     print("\n" + "="*60)
-    print("✅ CONVERSION SUCCESSFUL")
+    print("CONVERSION SUCCESSFUL")
     print("="*60)
-    print(f"📁 Input:  {gmr_file_path}")
-    print(f"💾 Output: {output_file_path}")
+    print(f"Input:  {gmr_file_path}")
+    print(f"Output: {output_file_path}")
     print("-"*60)
-    print(f"📊 Frames Shape:  {frames.shape}")
-    print(f"🎬 Total Frames: {frames.shape[0]}")
-    print(f"⏱️  FPS:          {save_fps}")
-    print(f"🔄 Loop Mode:    {loop_mode_out}")
+    print(f"Frames Shape:  {frames.shape}")
+    print(f"Total Frames: {frames.shape[0]}")
+    print(f"FPS:          {save_fps}")
+    print(f"Loop Mode:    {loop_mode_out}")
     print("="*60 + "\n")
 
     return out_data

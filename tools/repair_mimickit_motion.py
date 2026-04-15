@@ -2,6 +2,7 @@ import argparse
 import os
 import pickle
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -100,15 +101,16 @@ def repair_motion(
             "fps": motion["fps"],
             "frames": frames.tolist(),
         }
-        tmp_path = os.path.join("/tmp", os.path.basename(output_file))
-        _save_motion(tmp_path, temp_motion)
-        shift = _compute_ground_shift(
-            motion_file=tmp_path,
-            char_file=char_file,
-            body_names=ground_bodies,
-            samples=ground_samples,
-            target_height=ground_target_height,
-        )
+        with tempfile.TemporaryDirectory(prefix="mimickit_repair_") as tmp_dir:
+            tmp_path = os.path.join(tmp_dir, os.path.basename(output_file))
+            _save_motion(tmp_path, temp_motion)
+            shift = _compute_ground_shift(
+                motion_file=tmp_path,
+                char_file=char_file,
+                body_names=ground_bodies,
+                samples=ground_samples,
+                target_height=ground_target_height,
+            )
         frames[:, 2] -= shift
 
     repaired = {

@@ -4,8 +4,8 @@ Convert mpc_joints SMPL-parameterized .npz (Z-up trans, basis-shifted root_orien
 Run from the MimicKit repository root:
 
     python tools/smpl_to_mimickit/mpc_joints_to_mimickit.py \\
-        --input_file dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P1.npz \\
-        --output_file dual_data/converted/p1.pkl \\
+        --input_file data/motions/dual/original/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P1.npz \\
+        --output_file data/motions/dual/converted/p1.pkl \\
         --loop clamp --z_correction full --input_fps 30
 
 For standard InterX / AMASS Y-up exports, use interx_smpl_to_mimickit.py instead.

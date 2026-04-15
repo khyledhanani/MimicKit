@@ -16,11 +16,11 @@ Use the conversion script to transform your GMR motion data into MimicKit-compat
 **Command:**
 
 ```bash
-python tools/data_format_conversion/gmr_to_mimickit.py --input_file {input_file_path} --output_file {output_file_path}
+python tools/gmr_to_mimickit/gmr_to_mimickit.py --input_file {input_file_path} --output_file {output_file_path}
 ```
 
 ---
 
 ## Note:
 
-The output motion file should be placed into `data/motions/{your dir}` for later use and it can be viewed using `view_motion_env`. This is also a good sanity test to see if your motion is converted correctly with `MimicKit`.
+The output motion file can be placed anywhere, but if you want to wire it into the checked-in configs it is convenient to keep it under `data/motions/`. After conversion, validate it against the target rig with `tools/validate_mimickit_motion.py` before using it in an env config.

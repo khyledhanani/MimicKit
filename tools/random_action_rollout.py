@@ -5,11 +5,11 @@ Single SMPL (`data/assets/smpl/smpl.xml`, default):
     --engine_config data/engines/newton_engine.yaml \\
     --num_envs 4 --steps 120
 
-Dual G1 + fat:
+Dual SMPL upper-back:
   python tools/random_action_rollout.py \\
-    --env_config data/envs/dual_deepmimic_g1_fat_env.yaml
+    --env_config data/envs/dual_deepmimic_smpl_upper_back_env.yaml
 
-Dual SMPL + viewer:
+Dual SMPL upper-only + viewer:
   python tools/random_action_rollout.py \\
     --env_config data/envs/dual_deepmimic_smpl_upper_only_env.yaml \\
     --visualize --num_envs 1

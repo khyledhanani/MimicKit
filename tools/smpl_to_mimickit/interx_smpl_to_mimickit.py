@@ -4,8 +4,8 @@ Convert InterX / AMASS / standard SMPL Y-up .npz exports to MimicKit motion (.pk
 Run from the MimicKit repository root:
 
     python tools/smpl_to_mimickit/interx_smpl_to_mimickit.py \\
-        --input_file dual_data/G001T003A016R008/P1.npz \\
-        --output_file dual_data/converted/out.pkl \\
+        --input_file data/motions/dual/original/G001T003A016R008/P1.npz \\
+        --output_file data/motions/dual/converted/out.pkl \\
         --loop clamp --z_correction full --input_fps 30
 
 For mpc_joints (Z-up trans) exports, use mpc_joints_to_mimickit.py instead.

@@ -29,12 +29,12 @@ MuJoCo **qpos** bundles (`qpos_A` / `qpos_B`) use `tools/interx_qpos_to_mimickit
 
 ## Examples
 
-InterX / Y-up (e.g. `dual_data/G001T003A016R008/P1.npz`):
+InterX / Y-up (e.g. `data/motions/dual/original/G001T003A016R008/P1.npz`):
 
 ```bash
 python tools/smpl_to_mimickit/interx_smpl_to_mimickit.py \
-    --input_file dual_data/G001T003A016R008/P1.npz \
-    --output_file dual_data/converted/G001T003A016R008_p1.pkl \
+    --input_file data/motions/dual/original/G001T003A016R008/P1.npz \
+    --output_file data/motions/dual/converted/G001T003A016R008_p1.pkl \
     --loop clamp --z_correction full --input_fps 30
 ```
 
@@ -42,8 +42,8 @@ mpc_joints / Z-up:
 
 ```bash
 python tools/smpl_to_mimickit/mpc_joints_to_mimickit.py \
-    --input_file dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P1.npz \
-    --output_file dual_data/converted/p1_upper_back_symmetric.pkl \
+    --input_file data/motions/dual/original/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P1.npz \
+    --output_file data/motions/dual/converted/p1_upper_back_symmetric.pkl \
     --loop clamp --z_correction full --input_fps 30
 ```
 
