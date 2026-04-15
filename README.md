@@ -1,157 +1,284 @@
 # MimicKit
 
-<p align="center">
-  <img src="images/teaser_humanoid.gif" width="32%" style="margin-right: 1px;">
-  <img src="images/teaser_g1.gif" width="32%" style="margin-right: 1px;">
-  <img src="images/teaser_go2.gif" width="32%">
-</p>
+[General framework README](docs/README_MimicKit.md) — installation, all imitation methods (DeepMimic, AMP, …), motion data format, and citation.
 
-This framework provides a suite of motion imitation methods for training motion controllers. This codebase is designed to be clean and lightweight, with minimal dependencies. A more detailed overview of MimicKit is available in the [Starter Guide](https://arxiv.org/abs/2510.13794). For a more feature-rich and modular motion imitation framework, checkout [ProtoMotions](https://github.com/NVlabs/ProtoMotions/). 
+## Dual Motion Pipeline
 
-Instructions for each method are available here:
-- [DeepMimic](docs/README_DeepMimic.md)
-- [Dual Motion Pipeline / Dual DeepMimic](docs/README_Dual_DeepMimic.md)
-- [AMP - Adversarial Motion Priors](docs/README_AMP.md)
-- [AWR - Advantage-Weighted Regression](docs/README_AWR.md)
-- [ASE - Adversarial Skill Embeddings](docs/README_ASE.md)
-- [LCP - Lipschitz-Constrained Policies](docs/README_LCP.md)
-- [ADD - Adversarial Differential Discriminator](docs/README_ADD.md)
+This guide documents the full dual-motion workflow in this repository:
+
+1. Start from Holosoma or EgoHuman motion exports.
+2. Convert them into MimicKit `.pkl` motions.
+3. Validate and preview the paired motions.
+4. Train a dual imitation policy.
+5. Test the trained policy and view the reference motions.
+
+All commands below assume you are running from the repository root.
 
 ---
 
-## Installation
+## 1. Setup
 
-This framework supports different simulator backends (referred to as `Engines`). We highly recommend using a package manager, like [Conda](https://docs.conda.io/projects/conda/en/stable/user-guide/install/index.html), to create dedicated Python environments for each simulator.
+for the base install:
 
-1. Install the simulator of your choice. 
-<details>
-<summary>Isaac Gym</summary>
+- install a supported simulator backend, Newton for the dual setups in this repo:
 
-Install [Isaac Gym](https://developer.nvidia.com/isaac-gym).
-
-To use Isaac Gym, specify the argument `--engine_config data/engines/isaac_gym_engine.yaml` when running the code.
-</details>
-
-<details>
-<summary>Isaac Lab</summary>
-
-Install [Isaac Lab](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html). This framework has been tested with `2ed331acfcbb1b96c47b190564476511836c3754`.
-
-To use Isaac Lab, specify the argument `--engine_config data/engines/isaac_lab_engine.yaml` when running the code.
-</details>
-
-<details>
 <summary>Newton</summary>
 
 Install [Newton](https://newton-physics.github.io/newton/guide/installation.html). This framework has been tested with `v1.0.0`.
 
 To use Newton, specify the argument `--engine_config data/engines/newton_engine.yaml` when running the code.
-</details>
+- `pip install -r requirements.txt`
+- download data from: https://drive.google.com/drive/folders/1g-PhQgRvmTFn-bhEDrxLhECDYDQ8s9MI?usp=sharing
 
-2. Install the requirements.
-```
-pip install -r requirements.txt
-```
+The main setup 
 
-3. Download assets and motion data from [here](https://1sfu-my.sharepoint.com/:u:/g/personal/xbpeng_sfu_ca/EclKq9pwdOBAl-17SogfMW0Bved4sodZBQ_5eZCiz9O--w?e=bqXBaa), then extract the contents into [`data/`](data/).
+For the dual examples already configured here, the most important runtime files are:
 
-
----
-
-## Training
-
-To train a model, run the following command:
-```
-python mimickit/run.py --mode train --num_envs 4096 --engine_config data/engines/isaac_gym_engine.yaml --env_config data/envs/deepmimic_humanoid_env.yaml --agent_config data/agents/deepmimic_humanoid_ppo_agent.yaml --visualize true --out_dir output/
-```
-- `--mode` selects either `train` or `test` mode.
-- `--num_envs` the number of parallel environments used for simulation. Not all environments support parallel envs, this is mainly used for Isaac Gym envs and other environments, like DeepMind Control Suite does not support this feature and should therefore use 1 for the number of envs.
-- `--engine_config` configuration file for the engine to select between different simulator backends.
-- `--env_config` configuration file for the environment.
-- `--agent_config` configuration file for the agent.
-- `--visualize` enables visualization. Rendering should be disabled for faster training.
-- `--out_dir` the output directory where the models and logs will be saved.
-- `--logger` the logger used to record training stats. The options are text `txt`, TensorBoard `tb`, or `wandb`.
-- `--video` either `true` or `false` to enable headless video recording, which are then recorded by the logger. Only Isaac Gym and Isaac Lab currently support video logging.
-
-Instead of specifying all arguments through the command line, arguments can also be loaded from an `arg_file`:
-```
-python mimickit/run.py --arg_file args/deepmimic_humanoid_ppo_args.txt --visualize true
-```
-The arguments in `arg_file` are treated the same as command line arguments. Arguments for all algorithms are provided in [`args/`](args/).
-
-
-## Testing
-
-To test a model, run the following command:
-```
-python mimickit/run.py --arg_file args/deepmimic_humanoid_ppo_args.txt --num_envs 4 --visualize true --mode test --model_file data/models/deepmimic_humanoid_spinkick_model.pt
-```
-- `--model_file` specifies the `.pt` file that contains the parameters of the trained model. Pretrained models are available in [`data/models/`](data/models/), and the corresponding training log files are available in [`data/logs/`](data/logs/).
-
-
-## Distributed Training
-
-To use distributed training with multi-CPU or multi-GPU:
-```
-python mimickit/run.py --arg_file args/deepmimic_humanoid_ppo_args.txt --devices cuda:0 cuda:1
-``` 
-- `--devices` specifies the devices used for training, which can be `cpu` or `cuda:{i}`. Multiple devices can be provided to parallelize training across multiple processes.
-
-
-## Visualizer UI
-
-- **Camera control:** Hold `Alt` key and drag with the left mouse button to pan the camera. Scroll with the mouse wheel to zoom in/out.
-- **Pause Simulation:** `Enter` key can be used to pause/unpause the simulation
-- **Step Simulation:** `Space` key can be used to step the simulator one step at a time.
-
-
-## Visualizing Training Logs
-
-When using the TensorBoard logger during training, a TensorBoard `events` file will be saved in the same output directory as the log file. The log can be viewed with:
-```
-tensorboard --logdir=output/ --port=6006 --samples_per_plugin scalars=999999
-```
-The output `log.txt` file can also be plotted using the plotting script [`plot_log.py`](tools/plot_log/plot_log.py).
+- `mimickit/run.py`: main train/test entrypoint
+- `mimickit/envs/dual_deepmimic_env.py`: dual imitation environment
+- `mimickit/envs/view_motion_dual_env.py`: paired motion viewer environment
+- `tools/interx_qpos_to_mimickit.py`: converts retargeted dual `qpos_A` / `qpos_B` bundles to MimicKit motions
+- `tools/smpl_to_mimickit/interx_smpl_to_mimickit.py`: converts Y-up SMPL archives to MimicKit
+- `tools/smpl_to_mimickit/mpc_joints_to_mimickit.py`: converts Z-up `mpc_joints` SMPL archives to MimicKit
+- `tools/validate_mimickit_motion.py`: checks a converted `.pkl` against a target rig (ensuring that the motion matches the body we want to mimic)
 
 ---
 
-## Motion Data
-Motion data is stored in [`data/motions/`](data/motions/). The `motion_file` field in the environment configuration file can be used to specify the reference motion clip. In addition to imitating individual motion clips, `motion_file` can also specify a dataset file, located in [`data/datasets/`](data/datasets/), which will train a model to imitate a dataset containing multiple motion clips.
+## 2. Which Converter To Use
 
-The `view_motion` environment can be used to visualize motion clips:
-```
-python mimickit/run.py --mode test --arg_file args/view_motion_humanoid_args.txt --visualize true
-```
+Use the converter that matches the source archive schema, not the dataset name.
 
-Motion clips are represented by the `Motion` class implemented in [`motion.py`](mimickit/anim/motion.py). Each motion clip is stored in a `.pkl` file. Each frame in a motion specifies the pose of the character according to
-```
-[root position (3D), root rotation (3D), joint rotations]
-```
-where 3D rotations are specified using 3D exponential maps. Joint rotations are recorded in the order that the joints are specified in the `.xml` file (i.e. depth-first traversal of the kinematic tree). For example, in the case of [`humanoid.xml`](data/assets/humanoid/humanoid.xml), each frame is represented as
-```
-[root position (3D), root rotation (3D), abdomen (3D), neck (3D), right_shoulder (3D), right_elbow (1D), left_shoulder (3D), left_elbow (1D), right_hip (3D), right_knee (1D), right_ankle (3D), left_hip (3D), left_knee (1D), left_ankle (3D)]
-```
-The rotations of 3D joints are represented using 3D exponential maps, and the rotations of 1D joints are represented using 1D rotation angles.
+| Source export | Typical keys | Use this converter |
+| --- | --- | --- |
+| Raw InterX / AMASS / standard SMPL | `poses` + `trans`, or `root_orient` / `global_orient` + `pose_body` + `trans` | `tools/smpl_to_mimickit/interx_smpl_to_mimickit.py` |
+| EgoHuman `mpc_joints` paired files | `root_orient`, `global_orient`, `trans`, `pose_body` | `tools/smpl_to_mimickit/mpc_joints_to_mimickit.py` |
+| Holosoma or retargeted dual bundle | `qpos_A`, `qpos_B`, usually plus `fps`, `dual_scene_xml`, `dual_prefix_A`, `dual_prefix_B` | `tools/interx_qpos_to_mimickit.py` |
 
+Concrete examples already present in this repo:
 
-## Motion Retargeting
-Motion retargeting can be done using [GMR](https://github.com/YanjieZe/GMR). A script to convert GMR files to the MimicKit format is available in [`tools/gmr_to_mimickit/`](tools/gmr_to_mimickit/).
-
-Converters for SMPL-parameterized motion (e.g. [AMASS](https://amass.is.tue.mpg.de/), InterX, mpc_joints) live in [`tools/smpl_to_mimickit/`](tools/smpl_to_mimickit/): use `interx_smpl_to_mimickit.py` for Y-up SMPL exports and `mpc_joints_to_mimickit.py` for Z-up mpc_joints exports (see that folder’s README).
+- Raw InterX SMPL-X clips:
+  - `dual_data/G001T003A016R008/P1.npz`
+  - `dual_data/G001T003A016R008/P2.npz`
+- EgoHuman `mpc_joints` paired clips:
+  - `dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P1.npz`
+  - `dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P2.npz`
+- EgoHuman or Holosoma-style dual retarget bundles:
+  - `dual_data/egohuman_dual_g1_upper_back_symmetric_no_y2z/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz`
+  - `dual_data/egohuman_dual_g1_fat_sharedscale_20260410_174839/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz`
 
 ---
 
-## Citation
-If you find this codebase helpful, please cite:
+## 3. Source Pipelines
+
+### A. Holosoma raw InterX to MimicKit
+
+Holosoma consumes dual-human joint tracks such as `holosoma/DATA/interx_dual_inputs/G058T003A016R008.npz`, where the archive contains `human_joints_A`, `human_joints_B`, and `fps`. For IAMR retargeting it can also use raw InterX SMPL-X pose files such as `dual_data/G001T003A016R008/P1.npz` and `P2.npz`.
+
+The main Holosoma dual-retarget entrypoints in this repo are:
+
+- `holosoma/src/holosoma_retargeting/holosoma_retargeting/examples/iamr_dual_retarget.py`
+- `holosoma/src/holosoma_retargeting/holosoma_retargeting/examples/dual_robot_retarget.py`
+- `holosoma/src/holosoma_retargeting/holosoma_retargeting/examples/mixed_robot_human_retarget.py`
+
+Example IAMR run:
+
+```bash
+python holosoma/src/holosoma_retargeting/holosoma_retargeting/examples/iamr_dual_retarget.py --data_dir holosoma/DATA/interx_dual_inputs --raw_interx_dir dual_data --output_dir dual_data/holosoma_interx_outputs --sequence_id G001T003A016R008
 ```
-@article{
-      MimicKitPeng2025,
-      title={MimicKit: A Reinforcement Learning Framework for Motion Imitation and Control}, 
-      author={Peng, Xue Bin},
-      year={2025},
-      eprint={2510.13794},
-      archivePrefix={arXiv},
-      primaryClass={cs.GR},
-      url={https://arxiv.org/abs/2510.13794}, 
-}
+
+The retargeted Holosoma output is a dual `.npz` bundle with keys like:
+
+- `qpos_A`
+- `qpos_B`
+- `fps`
+- `dual_scene_xml`
+- `dual_prefix_A`
+- `dual_prefix_B`
+- `qpos_coordinate_frame`
+
+That output should then be converted with `tools/interx_qpos_to_mimickit.py`.
+
+### B. Raw InterX SMPL-X to MimicKit without retargeting
+
+If you only want to view or train on paired human SMPL motions directly, convert `P1.npz` and `P2.npz` separately:
+
+```bash
+python tools/smpl_to_mimickit/interx_smpl_to_mimickit.py --input_file dual_data/G001T003A016R008/P1.npz --output_file dual_data/converted/G001T003A016R008_p1.pkl --loop clamp --z_correction full --input_fps 30
+
+python tools/smpl_to_mimickit/interx_smpl_to_mimickit.py --input_file dual_data/G001T003A016R008/P2.npz --output_file dual_data/converted/G001T003A016R008_p2.pkl --loop clamp --z_correction full --input_fps 30
+```
+
+Those files are already wired into `data/envs/dual_deepmimic_smpl_g001t003a016r008_env.yaml`.
+
+### C. EgoHuman `mpc_joints` paired SMPL exports to MimicKit
+
+The paired EgoHuman source files under `dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/` contain Z-up SMPL motion with keys such as:
+
+- `root_orient`
+- `global_orient`
+- `trans`
+- `pose_body`
+
+Convert them with the `mpc_joints` converter:
+
+```bash
+python tools/smpl_to_mimickit/mpc_joints_to_mimickit.py --input_file dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P1.npz --output_file dual_data/converted/p1_upper_back_symmetric.pkl --loop clamp --z_correction full --input_fps 30
+
+python tools/smpl_to_mimickit/mpc_joints_to_mimickit.py --input_file dual_data/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric/P2.npz --output_file dual_data/converted/p2_upper_back_symmetric.pkl --loop clamp --z_correction full --input_fps 30
+```
+
+These are the paired human clips used by `data/envs/view_motion_dual_smpl_env.yaml`.
+
+### D. EgoHuman or Holosoma retargeted dual bundles to MimicKit
+
+When the source has already been retargeted and saved as one dual bundle with `qpos_A` and `qpos_B`, convert both sides in one step:
+
+```bash
+python tools/interx_qpos_to_mimickit.py --input_file dual_data/egohuman_dual_g1_upper_back_symmetric_no_y2z/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz --output_motion_a dual_data/converted/egohuman_dual_g1_upper_back_symmetric_g1_a.pkl --output_motion_b dual_data/converted/egohuman_dual_g1_upper_back_symmetric_g1_b.pkl --char_file_a data/assets/g1/g1.xml --char_file_b data/assets/g1/g1.xml --loop clamp --input_fps 30
+```
+
+For the mixed G1 + human-variant setup, the exact same converter is used, but with different target rigs:
+
+```bash
+python tools/interx_qpos_to_mimickit.py --input_file dual_data/egohuman_dual_g1_fat_sharedscale_20260410_174839/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz --output_motion_a dual_data/converted/egohuman_g1_fat_g1.pkl --output_motion_b dual_data/converted/egohuman_g1_fat_fat.pkl --char_file_a data/assets/g1/g1.xml --char_file_b data/assets/smpl/human_variants/fat.xml --loop clamp --input_fps 30
+```
+
+Use this converter whenever the archive already has robot or articulated-character `qpos` data. Use the SMPL converters only for raw `poses` / `trans` style source files.
+
+---
+
+## 4. Validate And Preview Converted Motions
+
+Validate each converted motion before training:
+
+```bash
+python tools/validate_mimickit_motion.py --motion_file dual_data/converted/egohuman_dual_g1_upper_back_symmetric_g1_a.pkl --char_file data/assets/g1/g1.xml
+
+python tools/validate_mimickit_motion.py --motion_file dual_data/converted/egohuman_g1_fat_fat.pkl --char_file data/assets/smpl/human_variants/fat.xml
+```
+
+Two good viewing options:
+
+1. Simple paired viewer for the raw converted clips:
+
+```bash
+python tools/view_paired_motion.py --char_file_a data/assets/g1/g1.xml --char_file_b data/assets/g1/g1.xml --motion_file_a dual_data/converted/egohuman_dual_g1_upper_back_symmetric_g1_a.pkl --motion_file_b dual_data/converted/egohuman_dual_g1_upper_back_symmetric_g1_b.pkl
+```
+
+2. MimicKit viewer env using the repo arg presets:
+
+```bash
+python mimickit/run.py --arg_file args/view_motion_dual_g1_upper_back_symmetric_args.txt --visualize true
+python mimickit/run.py --arg_file args/view_motion_dual_g1_fat_args.txt --visualize true
+python mimickit/run.py --arg_file args/view_motion_dual_smpl_args.txt --visualize true
+```
+
+If the motion looks rotated or upside-down after conversion, the repair helpers are:
+
+- `tools/fix_mimickit_motion_basis.py`
+- `tools/repair_mimickit_motion.py`
+
+---
+
+## 5. Wire The Motion Files Into A Dual Env
+
+The dual environment YAML is where the converted motions become training data. The key fields are:
+
+- `char_file_a` / `char_file_b`: the actor rigs
+- `motion_file_a` / `motion_file_b`: the converted MimicKit clips
+- `init_pose_a` / `init_pose_b` or `init_pose`
+- reward weights, contact bodies, key bodies, and control mode
+
+The main dual env presets already in this repo are:
+
+- `data/envs/dual_deepmimic_g1_upper_back_symmetric_env.yaml`
+- `data/envs/view_motion_dual_g1_upper_back_symmetric_env.yaml`
+- `data/envs/dual_deepmimic_g1_fat_env.yaml`
+- `data/envs/view_motion_dual_g1_fat_env.yaml`
+- `data/envs/dual_deepmimic_smpl_g001t003a016r008_env.yaml`
+- `data/envs/view_motion_dual_smpl_env.yaml`
+
+The corresponding arg presets are:
+
+- `args/dual_deepmimic_g1_upper_back_symmetric_newton_ppo_args.txt`
+- `args/view_motion_dual_g1_upper_back_symmetric_args.txt`
+- `args/dual_deepmimic_g1_fat_newton_ppo_args.txt`
+- `args/view_motion_dual_g1_fat_args.txt`
+- `args/dual_deepmimic_smpl_upper_back_newton_ppo_args.txt`
+- `args/dual_deepmimic_smpl_upper_only_newton_ppo_args.txt`
+- `args/view_motion_dual_smpl_args.txt`
+
+---
+
+## 6. Train
+
+### Dual G1 upper-back symmetric
+
+```bash
+python mimickit/run.py --arg_file args/dual_deepmimic_g1_upper_back_symmetric_newton_ppo_args.txt --visualize true
+```
+
+### Dual G1 + fat human variant
+
+```bash
+python mimickit/run.py --arg_file args/dual_deepmimic_g1_fat_newton_ppo_args.txt --visualize true
+```
+
+### Dual SMPL human baseline
+
+```bash
+python mimickit/run.py --arg_file args/dual_deepmimic_smpl_upper_back_newton_ppo_args.txt --visualize true
+```
+
+Training outputs are written to the `out_dir` from the arg file, for example:
+
+- `output/dual_deepmimic_g1_upper_back_symmetric/`
+- `output/dual_deepmimic_g1_fat/`
+- `output/dual_deepmimic_smpl_upper_back/`
+
+Each run saves:
+
+- `model.pt`: latest policy checkpoint
+- `log.txt`: text training log
+- copied config snapshots: `engine_config.yaml`, `env_config.yaml`, `agent_config.yaml`
+- optionally `int_models/` if intermediate checkpoints are enabled
+
+---
+
+## 7. Test A Trained Policy
+
+Testing uses the same arg file plus `--mode test` and `--model_file`.
+
+Example for the G1 upper-back symmetric setup:
+
+```bash
+python mimickit/run.py --arg_file args/dual_deepmimic_g1_upper_back_symmetric_newton_ppo_args.txt --mode test --num_envs 1 --visualize true --model_file output/dual_deepmimic_g1_upper_back_symmetric/model.pt
+```
+
+Example for the G1 + fat setup:
+
+```bash
+python mimickit/run.py --arg_file args/dual_deepmimic_g1_fat_newton_ppo_args.txt --mode test --num_envs 1 --visualize true --model_file output/dual_deepmimic_g1_fat/model.pt
+```
+
+---
+
+## 8. Quick File Map
+
+- `dual_data/`: example source files, retarget bundles, and converted dual motions
+- `dual_data/converted/`: converted MimicKit `.pkl` motion files used by the env presets
+- `holosoma/`: retargeting pipeline used to produce dual `qpos_A` / `qpos_B` bundles
+- `egohuman-rl/`: source single-human motion data and related physics backend integration
+- `data/envs/`: dual training and view environment presets
+- `data/agents/dual_deepmimic_g1_fat_ppo_agent.yaml`: PPO config used by the dual G1 presets
+- `args/`: runnable command presets for training and viewing
+- `output/`: checkpoints and logs after training
+
+---
+
+## 9. Practical Rule Of Thumb
+
+- If the file has `qpos_A` and `qpos_B`, use `tools/interx_qpos_to_mimickit.py`.
+- If the file has `P1.npz` / `P2.npz` with SMPL pose arrays and `trans`, use one of the SMPL converters.
+- Validate each `.pkl` against the exact target rig before starting a long training run.
+- Once the converted motion paths in `data/envs/*.yaml` are correct, training, testing, and viewing all go through `mimickit/run.py`.
