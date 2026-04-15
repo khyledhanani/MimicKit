@@ -10,6 +10,7 @@ This framework provides a suite of motion imitation methods for training motion 
 
 Instructions for each method are available here:
 - [DeepMimic](docs/README_DeepMimic.md)
+- [Dual Motion Pipeline / Dual DeepMimic](docs/README_Dual_DeepMimic.md)
 - [AMP - Adversarial Motion Priors](docs/README_AMP.md)
 - [AWR - Advantage-Weighted Regression](docs/README_AWR.md)
 - [ASE - Adversarial Skill Embeddings](docs/README_ASE.md)

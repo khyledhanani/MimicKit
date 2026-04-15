@@ -12,6 +12,8 @@ egohuman-rl/
 data/assets
 
 data/models
-data/motions
+data/motions/*
+!data/motions/dual/
+!data/motions/dual/**
 
 holosoma
