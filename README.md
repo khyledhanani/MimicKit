@@ -107,7 +107,7 @@ These are the paired human clips used by `data/envs/view_motion_dual_smpl_env.ya
 When the source has already been retargeted and saved as one dual bundle with `qpos_A` and `qpos_B`, convert both sides in one step:
 
 ```bash
-python tools/interx_qpos_to_mimickit.py --input_file data/motions/dual/original/egohuman_dual_g1_upper_back_symmetric_no_y2z/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz --output_motion_a data/motions/dual/converted/egohuman_dual_g1_upper_back_symmetric_g1_a.pkl --output_motion_b data/motions/dual/converted/egohuman_dual_g1_upper_back_symmetric_g1_b.pkl --char_file_a data/assets/g1/g1.xml --char_file_b data/assets/g1/g1.xml --loop clamp --input_fps 30
+python tools/interx_qpos_to_mimickit.py --input_file data/motions/dual/original/egohuman_dual_g1_upper_back_symmetric_no_y2z/mpc_joints_c_interact_environment-simple_hug_scenario-upper_back_symmetric.npz --output_motion_a data/motions/dual/converted/egohuman_dual_g1_upper_back_symmetric_g1_a.pkl --output_motion_b data/motions/dual/converted/egohuman_dual_g1_upper_back_symmetric_g1_b.pkl --char_file_a data/assets/g1/g1.xml --char_file_b data/assets/g1/g1.xml --loop clamp --input_fps 30 --quat_format wxyz --root_basis_correction none
 ```
 
 Use this converter whenever the archive already has robot or articulated-character `qpos` data. Use the SMPL converters only for raw `poses` / `trans` style source files.
