@@ -20,6 +20,8 @@ for the base install:
 - pip install newton
 - `pip install -r requirements.txt`
 
+The main setup 
+
 For the dual examples already configured here, the most important runtime files are:
 
 - `mimickit/run.py`: main train/test entrypoint
